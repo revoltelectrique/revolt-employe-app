@@ -233,3 +233,60 @@ export interface DocumentComment {
   updated_at: string
   author?: { id: string; email: string; first_name?: string; last_name?: string }
 }
+
+// =============================================
+// REÇUS D'ACHAT
+// =============================================
+
+export type ReceiptStatus = 'en_attente' | 'approuve' | 'refuse'
+export type PaymentMethod = 'carte_credit' | 'carte_debit' | 'cash'
+
+export interface ReceiptCategory {
+  id: string
+  name: string
+  description: string | null
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface Receipt {
+  id: string
+  receipt_number: string
+  submitted_by: string
+  submission_date: string
+  vendor_name: string | null
+  receipt_date: string | null
+  receipt_reference: string | null
+  subtotal: number | null
+  tax_amount: number | null
+  total_amount: number
+  category_id: string | null
+  payment_method: PaymentMethod
+  project_name: string | null
+  notes: string | null
+  image_url: string
+  ocr_raw_data: Record<string, unknown> | null
+  ocr_confidence: number | null
+  is_manually_entered: boolean
+  status: ReceiptStatus
+  reviewed_by: string | null
+  reviewed_at: string | null
+  rejection_reason: string | null
+  created_at: string
+  updated_at: string
+  // Relations
+  category?: ReceiptCategory
+}
+
+// Interface pour les données OCR extraites
+export interface OCRData {
+  vendor_name: string | null
+  subtotal: number | null
+  tax_amount: number | null
+  total_amount: number | null
+  receipt_date: string | null
+  receipt_reference: string | null
+  raw_text: string
+  confidence: number
+}

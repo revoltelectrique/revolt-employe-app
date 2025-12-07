@@ -25,6 +25,9 @@ import ModifierBCScreen from './src/screens/ModifierBCScreen'
 import TachesScreen from './src/screens/TachesScreen'
 import DetailsTacheScreen from './src/screens/DetailsTacheScreen'
 import NouvelleTacheScreen from './src/screens/NouvelleTacheScreen'
+import MesRecusScreen from './src/screens/MesRecusScreen'
+import NouveauRecuScreen from './src/screens/NouveauRecuScreen'
+import DetailsRecuScreen from './src/screens/DetailsRecuScreen'
 
 const Stack = createNativeStackNavigator()
 const Tab = createBottomTabNavigator()
@@ -36,6 +39,7 @@ function TabIcon({ name, focused }: { name: string; focused: boolean }) {
     Chantiers: '💬',
     'Bons de commande': '📄',
     Réquisitions: '📦',
+    Reçus: '🧾',
     Profil: '👤',
   }
   return (
@@ -77,6 +81,11 @@ function MainTabs() {
         name="Réquisitions"
         component={RequisitionsScreen}
         options={{ title: 'Réquisitions' }}
+      />
+      <Tab.Screen
+        name="Reçus"
+        component={MesRecusScreen}
+        options={{ title: 'Mes reçus' }}
       />
       <Tab.Screen
         name="Profil"
@@ -220,6 +229,16 @@ function AppNavigator({ navigationRef }: { navigationRef: any }) {
         name="BonsCommande"
         component={BonsCommandeScreen}
         options={{ title: 'Bons de commande' }}
+      />
+      <Stack.Screen
+        name="NouveauRecu"
+        component={NouveauRecuScreen}
+        options={{ title: 'Nouveau reçu' }}
+      />
+      <Stack.Screen
+        name="DetailsRecu"
+        component={DetailsRecuScreen}
+        options={{ title: 'Détails du reçu' }}
       />
     </Stack.Navigator>
   )
