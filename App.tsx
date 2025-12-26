@@ -28,6 +28,9 @@ import NouvelleTacheScreen from './src/screens/NouvelleTacheScreen'
 import MesRecusScreen from './src/screens/MesRecusScreen'
 import NouveauRecuScreen from './src/screens/NouveauRecuScreen'
 import DetailsRecuScreen from './src/screens/DetailsRecuScreen'
+import CommandesFournisseursScreen from './src/screens/CommandesFournisseursScreen'
+import DetailsCommandeSupplierScreen from './src/screens/DetailsCommandeSupplierScreen'
+import ScanQRScreen from './src/screens/ScanQRScreen'
 
 const Stack = createNativeStackNavigator()
 const Tab = createBottomTabNavigator()
@@ -40,6 +43,7 @@ function TabIcon({ name, focused }: { name: string; focused: boolean }) {
     'Bons de commande': '📄',
     Réquisitions: '📦',
     Reçus: '🧾',
+    Commandes: '🚚',
     Profil: '👤',
   }
   return (
@@ -86,6 +90,11 @@ function MainTabs() {
         name="Reçus"
         component={MesRecusScreen}
         options={{ title: 'Mes reçus' }}
+      />
+      <Tab.Screen
+        name="Commandes"
+        component={CommandesFournisseursScreen}
+        options={{ title: 'Commandes fournisseurs' }}
       />
       <Tab.Screen
         name="Profil"
@@ -239,6 +248,16 @@ function AppNavigator({ navigationRef }: { navigationRef: any }) {
         name="DetailsRecu"
         component={DetailsRecuScreen}
         options={{ title: 'Détails du reçu' }}
+      />
+      <Stack.Screen
+        name="DetailsCommandeSupplier"
+        component={DetailsCommandeSupplierScreen}
+        options={{ title: 'Détails de la commande' }}
+      />
+      <Stack.Screen
+        name="ScanQR"
+        component={ScanQRScreen}
+        options={{ title: 'Scanner QR code' }}
       />
     </Stack.Navigator>
   )
