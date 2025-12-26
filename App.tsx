@@ -54,6 +54,18 @@ function TabIcon({ name, focused }: { name: string; focused: boolean }) {
 }
 
 function MainTabs() {
+  const { profile } = useAuth()
+
+  // Admin a acces a tout
+  const isAdmin = profile?.role === 'admin'
+
+  // Permissions (admin = tout, sinon verifier les permissions)
+  const canAccessTasks = isAdmin || profile?.can_access_tasks
+  const canAccessConversations = isAdmin || profile?.can_access_conversations
+  const canAccessRequisitions = isAdmin || profile?.can_access_requisitions
+  const canAccessReceipts = isAdmin || profile?.can_access_receipts
+  const canAccessInventory = isAdmin || profile?.can_access_inventory
+
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -71,31 +83,41 @@ function MainTabs() {
         component={HomeScreen}
         options={{ headerShown: false }}
       />
-      <Tab.Screen
-        name="Tâches"
-        component={TachesScreen}
-        options={{ title: 'Mes tâches' }}
-      />
-      <Tab.Screen
-        name="Chantiers"
-        component={ConversationsListScreen}
-        options={{ title: 'Chantiers' }}
-      />
-      <Tab.Screen
-        name="Réquisitions"
-        component={RequisitionsScreen}
-        options={{ title: 'Réquisitions' }}
-      />
-      <Tab.Screen
-        name="Reçus"
-        component={MesRecusScreen}
-        options={{ title: 'Mes reçus' }}
-      />
-      <Tab.Screen
-        name="Commandes"
-        component={CommandesFournisseursScreen}
-        options={{ title: 'Commandes fournisseurs' }}
-      />
+      {canAccessTasks && (
+        <Tab.Screen
+          name="Tâches"
+          component={TachesScreen}
+          options={{ title: 'Mes tâches' }}
+        />
+      )}
+      {canAccessConversations && (
+        <Tab.Screen
+          name="Chantiers"
+          component={ConversationsListScreen}
+          options={{ title: 'Chantiers' }}
+        />
+      )}
+      {canAccessRequisitions && (
+        <Tab.Screen
+          name="Réquisitions"
+          component={RequisitionsScreen}
+          options={{ title: 'Réquisitions' }}
+        />
+      )}
+      {canAccessReceipts && (
+        <Tab.Screen
+          name="Reçus"
+          component={MesRecusScreen}
+          options={{ title: 'Mes reçus' }}
+        />
+      )}
+      {canAccessInventory && (
+        <Tab.Screen
+          name="Commandes"
+          component={CommandesFournisseursScreen}
+          options={{ title: 'Commandes fournisseurs' }}
+        />
+      )}
       <Tab.Screen
         name="Profil"
         component={ProfileScreen}

@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'contremaitre' | 'employe' | 'client'
+export type UserRole = 'admin' | 'contremaitre' | 'employe' | 'client' | 'entrepot'
 
 export type PurchaseOrderStatus = 'en_attente' | 'traite'
 export type MaterialRequestStatus = 'en_attente' | 'traite'
@@ -13,6 +13,13 @@ export interface User {
   organization_id: string | null
   role: UserRole
   can_view_client_portal: boolean
+  // Permissions modules
+  can_access_purchase_orders: boolean
+  can_access_requisitions: boolean
+  can_access_inventory: boolean
+  can_access_tasks: boolean
+  can_access_conversations: boolean
+  can_access_receipts: boolean
   created_at: string
   expo_push_token?: string | null
 }
@@ -289,4 +296,186 @@ export interface OCRData {
   receipt_reference: string | null
   raw_text: string
   confidence: number
+}
+
+// =============================================
+// MODULE INVENTAIRE
+// =============================================
+
+export type InventoryItemStatus =
+  | 'en_stock'
+  | 'reserve'
+  | 'en_transit'
+  | 'sur_chantier'
+  | 'utilise'
+  | 'retourne'
+  | 'perdu'
+  | 'defectueux'
+
+export type InventoryMovementType =
+  | 'reception'
+  | 'transfert'
+  | 'sortie'
+  | 'utilisation'
+  | 'retour'
+  | 'ajustement'
+  | 'perte'
+  | 'defectueux'
+
+export type KitStatus = 'brouillon' | 'pret' | 'en_transit' | 'sur_chantier' | 'utilise' | 'partiel'
+
+export type SupplierOrderStatus = 'en_attente' | 'partiel' | 'recu' | 'annule'
+
+export interface Supplier {
+  id: string
+  name: string
+  display_name: string
+  is_active: boolean
+}
+
+export interface Product {
+  id: string
+  sku: string | null
+  name: string
+  description: string | null
+  category: string | null
+  default_unit: string
+}
+
+export interface SupplierOrder {
+  id: string
+  purchase_order_id: string | null
+  supplier_id: string | null
+  supplier_order_number: string | null
+  po_reference: string | null
+  servicentre_call_number: string | null
+  client_name: string | null
+  status: SupplierOrderStatus
+  expected_delivery_date: string | null
+  delivery_location: string
+  created_at: string
+  supplier?: Supplier
+  items?: SupplierOrderItem[]
+}
+
+export interface SupplierOrderItem {
+  id: string
+  order_id: string
+  supplier_sku: string | null
+  description: string
+  quantity_ordered: number
+  quantity_received: number
+  unit_price: number | null
+  unit: string
+  product?: Product
+}
+
+export interface InventoryItem {
+  id: string
+  qr_code: string
+  supplier_order_item_id: string | null
+  product_id: string | null
+  servicentre_call_number: string | null
+  client_name: string | null
+  purchase_order_id: string | null
+  description: string
+  quantity: number
+  unit: string
+  unit_cost: number | null
+  location: string
+  storage_zone: string | null
+  status: InventoryItemStatus
+  photo_url: string | null
+  label_printed: boolean
+  created_at: string
+  updated_at: string
+  product?: Product
+  purchase_order?: { id: string; po_number: string }
+}
+
+export interface InventoryMovement {
+  id: string
+  inventory_item_id: string
+  movement_type: InventoryMovementType
+  from_location: string | null
+  to_location: string | null
+  quantity: number | null
+  servicentre_call_number: string | null
+  client_name: string | null
+  performed_by: string
+  gps_latitude: number | null
+  gps_longitude: number | null
+  photo_url: string | null
+  notes: string | null
+  created_at: string
+  performer?: { id: string; email: string; first_name?: string; last_name?: string }
+}
+
+export interface Kit {
+  id: string
+  qr_code: string
+  name: string
+  description: string | null
+  servicentre_call_number: string | null
+  client_name: string | null
+  status: KitStatus
+  location: string
+  label_printed: boolean
+  created_at: string
+  items?: KitItem[]
+}
+
+export interface KitItem {
+  id: string
+  kit_id: string
+  inventory_item_id: string
+  quantity: number
+  inventory_item?: InventoryItem
+}
+
+export interface InventoryLocation {
+  id: string
+  code: string
+  name: string
+  city: string | null
+  is_warehouse: boolean
+  is_active: boolean
+}
+
+// Type pour le contenu scanne du QR code
+export interface ScannedQRContent {
+  t: 'inv' | 'kit'  // type: inventory_item ou kit
+  id: string        // UUID de l'item
+  q: string         // QR code lisible (INV-... ou KIT-...)
+}
+
+// Type pour les actions apres scan
+export type ScanAction =
+  | 'view_details'
+  | 'confirm_receipt'
+  | 'checkout_to_site'
+  | 'confirm_use'
+  | 'return_to_inventory'
+  | 'report_issue'
+
+export interface ScanActionOption {
+  action: ScanAction
+  label: string
+  icon: string
+  available: boolean
+  description?: string
+}
+
+// Type pour creer un mouvement depuis l'app mobile
+export interface CreateMovementInput {
+  inventory_item_id: string
+  movement_type: InventoryMovementType
+  to_location?: string
+  servicentre_call_number?: string
+  client_name?: string
+  quantity?: number
+  gps_latitude?: number
+  gps_longitude?: number
+  photo_url?: string
+  notes?: string
 }
