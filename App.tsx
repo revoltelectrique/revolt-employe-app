@@ -31,6 +31,13 @@ import DetailsRecuScreen from './src/screens/DetailsRecuScreen'
 import CommandesFournisseursScreen from './src/screens/CommandesFournisseursScreen'
 import DetailsCommandeSupplierScreen from './src/screens/DetailsCommandeSupplierScreen'
 import ScanQRScreen from './src/screens/ScanQRScreen'
+// ERP Beta
+import ErpHomeScreen from './src/screens/ErpHomeScreen'
+import ErpAppelsScreen from './src/screens/ErpAppelsScreen'
+import ErpNouvelAppelScreen from './src/screens/ErpNouvelAppelScreen'
+import ErpDetailsAppelScreen from './src/screens/ErpDetailsAppelScreen'
+import ErpFeuilleTempsScreen from './src/screens/ErpFeuilleTempsScreen'
+import ErpInventaireScreen from './src/screens/ErpInventaireScreen'
 
 const Stack = createNativeStackNavigator()
 const Tab = createBottomTabNavigator()
@@ -44,6 +51,7 @@ function TabIcon({ name, focused }: { name: string; focused: boolean }) {
     Réquisitions: '📦',
     Reçus: '🧾',
     Commandes: '🚚',
+    ERP: '⚡',
     Profil: '👤',
   }
   return (
@@ -65,6 +73,7 @@ function MainTabs() {
   const canAccessRequisitions = isAdmin || profile?.can_access_requisitions
   const canAccessReceipts = isAdmin || profile?.can_access_receipts
   const canAccessInventory = isAdmin || profile?.can_access_inventory
+  const canAccessErpBeta = isAdmin || profile?.can_access_erp_beta
 
   return (
     <Tab.Navigator
@@ -116,6 +125,13 @@ function MainTabs() {
           name="Commandes"
           component={CommandesFournisseursScreen}
           options={{ title: 'Commandes fournisseurs' }}
+        />
+      )}
+      {canAccessErpBeta && (
+        <Tab.Screen
+          name="ERP"
+          component={ErpHomeScreen}
+          options={{ headerShown: false }}
         />
       )}
       <Tab.Screen
@@ -280,6 +296,32 @@ function AppNavigator({ navigationRef }: { navigationRef: any }) {
         name="ScanQR"
         component={ScanQRScreen}
         options={{ title: 'Scanner QR code' }}
+      />
+      {/* ERP Beta Screens */}
+      <Stack.Screen
+        name="ErpAppels"
+        component={ErpAppelsScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="ErpNouvelAppel"
+        component={ErpNouvelAppelScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="ErpDetailsAppel"
+        component={ErpDetailsAppelScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="ErpFeuilleTemps"
+        component={ErpFeuilleTempsScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="ErpInventaire"
+        component={ErpInventaireScreen}
+        options={{ headerShown: false }}
       />
     </Stack.Navigator>
   )

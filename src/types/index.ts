@@ -20,6 +20,7 @@ export interface User {
   can_access_tasks: boolean
   can_access_conversations: boolean
   can_access_receipts: boolean
+  can_access_erp_beta: boolean
   created_at: string
   expo_push_token?: string | null
 }
@@ -478,4 +479,157 @@ export interface CreateMovementInput {
   gps_longitude?: number
   photo_url?: string
   notes?: string
+}
+
+// =============================================
+// MODULE ERP BETA
+// =============================================
+
+export type ErpServiceCallStatus = 'ouvert' | 'en_cours' | 'termine' | 'facture' | 'annule'
+export type ErpServiceCallPriority = 'normale' | 'urgente' | 'planifiee'
+export type ErpRateType = 'regulier' | 'temps_demi' | 'double' | 'forfait'
+
+export const ERP_LOCATIONS = [
+  'Forestville',
+  'Pessamit',
+  'Baie-Comeau',
+  'Fermont',
+  'Riviere-du-Loup',
+] as const
+
+export const ERP_RATES: { value: ErpRateType; label: string; multiplier: number }[] = [
+  { value: 'regulier', label: 'Régulier', multiplier: 1 },
+  { value: 'temps_demi', label: 'Temps et demi', multiplier: 1.5 },
+  { value: 'double', label: 'Temps double', multiplier: 2 },
+  { value: 'forfait', label: 'Forfait', multiplier: 1 },
+]
+
+export interface ErpClient {
+  id: string
+  numero: string
+  nom: string
+  adresse: string | null
+  ville: string | null
+  province: string | null
+  code_postal: string | null
+  telephone: string | null
+  courriel: string | null
+  type: 'principal' | 'succursale' | 'contact'
+  est_principal: boolean
+  synced_at: string | null
+}
+
+export interface ErpServiceCall {
+  id: string
+  numero: number
+  client_facture_a_id: string | null
+  client_effectue_pour_id: string | null
+  localisation: string | null
+  description: string | null
+  statut: ErpServiceCallStatus
+  priorite: ErpServiceCallPriority
+  taux_applicable: ErpRateType
+  po_client: string | null
+  created_by: string
+  created_at: string
+  updated_at: string
+  closed_at: string | null
+  // Relations
+  client_facture_a?: ErpClient
+  client_effectue_pour?: ErpClient
+  creator?: { id: string; email: string; first_name?: string; last_name?: string }
+  segments?: ErpWorkOrderSegment[]
+  time_entries?: ErpTimeEntry[]
+  materials?: ErpMaterial[]
+}
+
+export interface ErpWorkOrderSegment {
+  id: string
+  service_call_id: string
+  segment_number: number
+  description: string | null
+  created_at: string
+}
+
+export interface ErpTimeEntry {
+  id: string
+  service_call_id: string
+  segment_id: string | null
+  employee_id: string
+  work_date: string
+  hours: number
+  rate_type: ErpRateType
+  rate_multiplier: number
+  description: string | null
+  created_at: string
+  updated_at: string
+  // Relations
+  employee?: { id: string; email: string; first_name?: string; last_name?: string }
+  segment?: ErpWorkOrderSegment
+}
+
+export interface ErpMaterial {
+  id: string
+  service_call_id: string
+  segment_id: string | null
+  product_code: string
+  description: string
+  quantity: number
+  unit_price: number
+  created_at: string
+  // Relations
+  segment?: ErpWorkOrderSegment
+}
+
+// Produit Avantage (inventaire)
+export interface AvantageProduct {
+  id: string
+  code: string
+  description: string
+  prix_coutant: number
+  prix_vente: number
+  unite: string
+  categorie: string | null
+  fournisseur: string | null
+  quantite_stock: number
+  gl_ventes: string | null
+  gl_stock: string | null
+  gl_achats: string | null
+  taxable_federal: boolean
+  taxable_provincial: boolean
+  localisation: string | null
+  code_fabricant: string | null
+  synced_at: string | null
+}
+
+// Input pour creer un appel de service
+export interface CreateErpServiceCallInput {
+  client_facture_a_id: string
+  client_effectue_pour_id?: string
+  localisation: string
+  description: string
+  priorite: ErpServiceCallPriority
+  taux_applicable: ErpRateType
+  po_client?: string
+}
+
+// Input pour ajouter du temps
+export interface CreateErpTimeEntryInput {
+  service_call_id: string
+  segment_id?: string
+  employee_id: string
+  work_date: string
+  hours: number
+  rate_type: ErpRateType
+  description?: string
+}
+
+// Input pour ajouter du materiel
+export interface CreateErpMaterialInput {
+  service_call_id: string
+  segment_id?: string
+  product_code: string
+  description: string
+  quantity: number
+  unit_price: number
 }
