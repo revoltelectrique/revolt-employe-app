@@ -63,11 +63,7 @@ export default function ErpFeuilleTempsScreen() {
 
       const { data, error } = await supabase
         .from('erp_time_entries')
-        .select(`
-          *,
-          employee:users!erp_time_entries_employee_id_fkey(id, email, first_name, last_name),
-          service_call:erp_service_calls!erp_time_entries_service_call_id_fkey(id, numero, client_facture_a_id)
-        `)
+        .select('*')
         .eq('employee_id', user?.id)
         .gte('work_date', startDate)
         .lte('work_date', endDate)
@@ -225,9 +221,6 @@ export default function ErpFeuilleTempsScreen() {
                 {day.entries.map((entry) => (
                   <View key={entry.id} style={styles.entryRow}>
                     <View style={styles.entryInfo}>
-                      <Text style={styles.entryCall}>
-                        Appel #{(entry as any).service_call?.numero || '?'}
-                      </Text>
                       {entry.description && (
                         <Text style={styles.entryDesc} numberOfLines={1}>
                           {entry.description}

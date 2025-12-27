@@ -48,12 +48,7 @@ export default function ErpAppelsScreen() {
     try {
       let query = supabase
         .from('erp_service_calls')
-        .select(`
-          *,
-          client_facture_a:erp_clients!erp_service_calls_client_facture_a_id_fkey(id, numero, nom),
-          client_effectue_pour:erp_clients!erp_service_calls_client_effectue_pour_id_fkey(id, numero, nom),
-          creator:users!erp_service_calls_created_by_fkey(id, email, first_name, last_name)
-        `)
+        .select('*')
         .order('numero', { ascending: false })
 
       // Apply filters
@@ -114,16 +109,6 @@ export default function ErpAppelsScreen() {
             </Text>
           </View>
         </View>
-
-        <Text style={styles.clientName} numberOfLines={1}>
-          {item.client_facture_a?.nom || 'Client non spécifié'}
-        </Text>
-
-        {item.client_effectue_pour && item.client_effectue_pour.id !== item.client_facture_a?.id && (
-          <Text style={styles.clientSecondary} numberOfLines={1}>
-            Pour: {item.client_effectue_pour.nom}
-          </Text>
-        )}
 
         {item.localisation && (
           <View style={styles.locationRow}>

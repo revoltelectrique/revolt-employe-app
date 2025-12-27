@@ -75,12 +75,7 @@ export default function ErpDetailsAppelScreen() {
       // Load service call
       const { data: callData, error: callError } = await supabase
         .from('erp_service_calls')
-        .select(`
-          *,
-          client_facture_a:erp_clients!erp_service_calls_client_facture_a_id_fkey(id, numero, nom, telephone),
-          client_effectue_pour:erp_clients!erp_service_calls_client_effectue_pour_id_fkey(id, numero, nom),
-          creator:users!erp_service_calls_created_by_fkey(id, email, first_name, last_name)
-        `)
+        .select('*')
         .eq('id', route.params.id)
         .single()
 
@@ -90,10 +85,7 @@ export default function ErpDetailsAppelScreen() {
       // Load time entries
       const { data: timeData } = await supabase
         .from('erp_time_entries')
-        .select(`
-          *,
-          employee:users!erp_time_entries_employee_id_fkey(id, email, first_name, last_name)
-        `)
+        .select('*')
         .eq('service_call_id', route.params.id)
         .order('work_date', { ascending: false })
 
@@ -271,31 +263,16 @@ export default function ErpDetailsAppelScreen() {
         style={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {/* Client Info */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>CLIENT</Text>
-          <View style={styles.card}>
-            <Text style={styles.clientName}>{call.client_facture_a?.nom}</Text>
-            {call.client_facture_a?.telephone && (
-              <Text style={styles.clientPhone}>📞 {call.client_facture_a.telephone}</Text>
-            )}
-            {call.client_effectue_pour &&
-              call.client_effectue_pour.id !== call.client_facture_a?.id && (
-                <Text style={styles.clientSecondary}>
-                  Effectué pour: {call.client_effectue_pour.nom}
-                </Text>
-              )}
-          </View>
-        </View>
-
         {/* Details */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>DÉTAILS</Text>
+          <Text style={styles.sectionTitle}>INFORMATIONS</Text>
           <View style={styles.card}>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Localisation</Text>
-              <Text style={styles.detailValue}>{call.localisation || '-'}</Text>
-            </View>
+            {call.localisation && (
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>📍 Localisation</Text>
+                <Text style={styles.detailValue}>{call.localisation}</Text>
+              </View>
+            )}
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>Taux</Text>
               <Text style={styles.detailValue}>{getRateLabel(call.taux_applicable)}</Text>
@@ -306,13 +283,18 @@ export default function ErpDetailsAppelScreen() {
                 <Text style={styles.detailValue}>{call.po_client}</Text>
               </View>
             )}
-            {call.description && (
-              <View style={styles.descriptionBox}>
-                <Text style={styles.descriptionText}>{call.description}</Text>
-              </View>
-            )}
           </View>
         </View>
+
+        {/* Description */}
+        {call.description && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>DESCRIPTION</Text>
+            <View style={styles.card}>
+              <Text style={styles.descriptionText}>{call.description}</Text>
+            </View>
+          </View>
+        )}
 
         {/* Time Entries */}
         <View style={styles.section}>
@@ -331,9 +313,6 @@ export default function ErpDetailsAppelScreen() {
               {timeEntries.map((entry) => (
                 <View key={entry.id} style={styles.timeRow}>
                   <View style={styles.timeInfo}>
-                    <Text style={styles.timeName}>
-                      {entry.employee?.first_name} {entry.employee?.last_name}
-                    </Text>
                     <Text style={styles.timeDate}>{entry.work_date}</Text>
                     {entry.description && (
                       <Text style={styles.timeDesc}>{entry.description}</Text>
