@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Alert,
   Switch,
+  Linking,
 } from 'react-native'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
@@ -90,6 +91,16 @@ export default function ProfileScreen() {
         { text: 'Déconnexion', style: 'destructive', onPress: signOut },
       ]
     )
+  }
+
+  const openFormation = async () => {
+    const url = 'https://portail.revoltelectrique.com/formation'
+    const canOpen = await Linking.canOpenURL(url)
+    if (canOpen) {
+      await Linking.openURL(url)
+    } else {
+      Alert.alert('Erreur', 'Impossible d\'ouvrir la page de formation')
+    }
   }
 
   const getRoleName = (role: string) => {
@@ -213,6 +224,23 @@ export default function ProfileScreen() {
             disabled={loading}
           />
         </View>
+      </Card>
+
+      {/* Formation */}
+      <Card style={styles.section}>
+        <Text style={styles.sectionTitle}>Formation</Text>
+        <TouchableOpacity style={styles.formationItem} onPress={openFormation}>
+          <View style={styles.formationInfo}>
+            <Text style={styles.formationIcon}>📖</Text>
+            <View>
+              <Text style={styles.formationLabel}>Guide d'utilisation</Text>
+              <Text style={styles.formationDescription}>
+                Apprenez à utiliser les modules du portail
+              </Text>
+            </View>
+          </View>
+          <Text style={styles.menuItemIcon}>→</Text>
+        </TouchableOpacity>
       </Card>
 
       {/* Actions */}
@@ -349,6 +377,30 @@ const styles = StyleSheet.create({
   menuItemIcon: {
     fontSize: 16,
     color: '#999',
+  },
+  formationItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  formationInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  formationIcon: {
+    fontSize: 24,
+  },
+  formationLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#333',
+    marginBottom: 2,
+  },
+  formationDescription: {
+    fontSize: 12,
+    color: '#666',
   },
   version: {
     textAlign: 'center',
