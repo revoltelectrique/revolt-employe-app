@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useMemo } from 'react'
 import {
   View,
   Text,
@@ -8,10 +8,13 @@ import {
   RefreshControl,
   ActivityIndicator,
 } from 'react-native'
-import { useNavigation, useFocusEffect } from '@react-navigation/native'
+import { useNavigation } from '@react-navigation/native'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import { Task, TaskStatus, TaskPriority } from '../types'
+import { useOfflineData } from '../hooks/useOfflineData'
+import { CacheKeys, CacheTTL } from '../lib/storage'
+import { useOffline } from '../contexts/OfflineContext'
 
 const statusLabels: Record<TaskStatus, { label: string; bg: string; text: string }> = {
   a_faire: { label: 'À faire', bg: '#F3F4F6', text: '#374151' },
@@ -31,53 +34,56 @@ const priorityLabels: Record<TaskPriority, { label: string; color: string }> = {
 export default function TachesScreen() {
   const navigation = useNavigation<any>()
   const { user } = useAuth()
-  const [tasks, setTasks] = useState<Task[]>([])
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
+  const { isOnline } = useOffline()
   const [filter, setFilter] = useState<'all' | 'active' | 'mine'>('active')
 
-  const fetchTasks = async () => {
-    if (!user?.id) return
+  // Fonction de fetch avec cache offline
+  const fetchTasks = useCallback(async (): Promise<Task[]> => {
+    if (!user?.id) return []
 
-    try {
-      let query = supabase
-        .from('tasks')
-        .select(`
-          *,
-          creator:users!created_by(id, email, first_name, last_name),
-          assignee:users!assigned_to(id, email, first_name, last_name),
-          subtasks:task_subtasks(id, is_completed)
-        `)
-        .or(`created_by.eq.${user.id},assigned_to.eq.${user.id}`)
-        .order('created_at', { ascending: false })
+    let query = supabase
+      .from('tasks')
+      .select(`
+        *,
+        creator:users!created_by(id, email, first_name, last_name),
+        assignee:users!assigned_to(id, email, first_name, last_name),
+        subtasks:task_subtasks(id, is_completed)
+      `)
+      .or(`created_by.eq.${user.id},assigned_to.eq.${user.id}`)
+      .order('created_at', { ascending: false })
 
-      if (filter === 'active') {
-        query = query.not('status', 'in', '("termine","annule")')
-      } else if (filter === 'mine') {
-        query = query.eq('assigned_to', user.id)
-      }
-
-      const { data, error } = await query
-
-      if (error) throw error
-      setTasks(data || [])
-    } catch (error) {
-      console.error('Erreur fetch tâches:', error)
-    } finally {
-      setLoading(false)
-      setRefreshing(false)
+    if (filter === 'active') {
+      query = query.not('status', 'in', '("termine","annule")')
+    } else if (filter === 'mine') {
+      query = query.eq('assigned_to', user.id)
     }
-  }
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchTasks()
-    }, [user?.id, filter])
+    const { data, error } = await query
+    if (error) throw error
+    return data || []
+  }, [user?.id, filter])
+
+  // Cache key inclut le filtre pour avoir des caches séparés
+  const cacheKey = useMemo(
+    () => `${CacheKeys.tasksList(user?.id || 'guest')}:${filter}`,
+    [user?.id, filter]
   )
 
-  const onRefresh = () => {
-    setRefreshing(true)
-    fetchTasks()
+  const {
+    data: tasks,
+    loading,
+    isStale,
+    isFromCache,
+    refetch,
+  } = useOfflineData<Task[]>(fetchTasks, {
+    cacheKey,
+    ttl: CacheTTL.MEDIUM,
+    strategy: 'stale-while-revalidate',
+    dependencies: [user?.id, filter],
+  })
+
+  const onRefresh = async () => {
+    await refetch()
   }
 
   const getUserName = (user?: { first_name?: string; last_name?: string; email?: string }) => {
@@ -155,6 +161,15 @@ export default function TachesScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Indicateur offline/cache */}
+      {(!isOnline || isFromCache) && (
+        <View style={[styles.cacheIndicator, !isOnline && styles.offlineIndicator]}>
+          <Text style={styles.cacheIndicatorText}>
+            {!isOnline ? '📡 Mode hors ligne' : isStale ? '⏳ Données en cache' : '✓ Cache récent'}
+          </Text>
+        </View>
+      )}
+
       {/* Filtres */}
       <View style={styles.filterContainer}>
         <TouchableOpacity
@@ -185,11 +200,11 @@ export default function TachesScreen() {
 
       {/* Liste */}
       <FlatList
-        data={tasks}
+        data={tasks || []}
         keyExtractor={(item) => item.id}
         renderItem={renderTask}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#64191E']} />
+          <RefreshControl refreshing={false} onRefresh={onRefresh} colors={['#64191E']} />
         }
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
@@ -221,6 +236,19 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  cacheIndicator: {
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  offlineIndicator: {
+    backgroundColor: '#FEE2E2',
+  },
+  cacheIndicatorText: {
+    fontSize: 12,
+    color: '#92400E',
   },
   loadingContainer: {
     flex: 1,

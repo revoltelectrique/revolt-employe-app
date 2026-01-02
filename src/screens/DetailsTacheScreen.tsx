@@ -12,12 +12,16 @@ import {
   Image,
   Linking,
 } from 'react-native'
-import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
+import { useNavigation, useRoute } from '@react-navigation/native'
 import * as ImagePicker from 'expo-image-picker'
 import * as DocumentPicker from 'expo-document-picker'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import { Task, TaskStatus, TaskPriority, TaskSubtask, TaskComment, TaskAttachment } from '../types'
+import { useOfflineDetail } from '../hooks/useOfflineData'
+import { CacheKeys } from '../lib/storage'
+import { useOffline } from '../contexts/OfflineContext'
+import { useOfflineQueue } from '../lib/offlineQueue'
 
 const statusLabels: Record<TaskStatus, { label: string; bg: string; text: string }> = {
   a_faire: { label: 'À faire', bg: '#F3F4F6', text: '#374151' },
@@ -41,66 +45,76 @@ export default function DetailsTacheScreen() {
   const route = useRoute<any>()
   const { user } = useAuth()
   const { taskId } = route.params
+  const { isOnline } = useOffline()
+  const { addMutation } = useOfflineQueue()
 
-  const [task, setTask] = useState<Task | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
+  const [localTask, setLocalTask] = useState<Task | null>(null)
   const [newComment, setNewComment] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [showStatusPicker, setShowStatusPicker] = useState(false)
   const [uploading, setUploading] = useState(false)
 
-  const fetchTask = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('tasks')
-        .select(`
-          *,
-          creator:users!created_by(id, email, first_name, last_name),
-          assignee:users!assigned_to(id, email, first_name, last_name),
-          linked_requisition:material_requests!linked_requisition_id(id, request_number, client_name),
-          subtasks:task_subtasks(id, title, is_completed, completed_at, position),
-          comments:task_comments(
-            id, content, created_at,
-            author:users!author_id(id, email, first_name, last_name)
-          ),
-          attachments:task_attachments(id, file_name, file_url, file_type)
-        `)
-        .eq('id', taskId)
-        .single()
+  // Fetch avec cache offline
+  const fetchTask = useCallback(async (): Promise<Task> => {
+    const { data, error } = await supabase
+      .from('tasks')
+      .select(`
+        *,
+        creator:users!created_by(id, email, first_name, last_name),
+        assignee:users!assigned_to(id, email, first_name, last_name),
+        linked_requisition:material_requests!linked_requisition_id(id, request_number, client_name),
+        subtasks:task_subtasks(id, title, is_completed, completed_at, position),
+        comments:task_comments(
+          id, content, created_at,
+          author:users!author_id(id, email, first_name, last_name)
+        ),
+        attachments:task_attachments(id, file_name, file_url, file_type)
+      `)
+      .eq('id', taskId)
+      .single()
 
-      if (error) throw error
+    if (error) throw error
 
-      // Trier les sous-tâches par position
-      if (data.subtasks) {
-        data.subtasks.sort((a: any, b: any) => a.position - b.position)
-      }
-      // Trier les commentaires par date
-      if (data.comments) {
-        data.comments.sort((a: any, b: any) =>
-          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-        )
-      }
-
-      setTask(data)
-    } catch (error) {
-      console.error('Erreur fetch tâche:', error)
-      Alert.alert('Erreur', 'Impossible de charger la tâche')
-    } finally {
-      setLoading(false)
-      setRefreshing(false)
+    // Trier les sous-tâches par position
+    if (data.subtasks) {
+      data.subtasks.sort((a: any, b: any) => a.position - b.position)
     }
-  }
+    // Trier les commentaires par date
+    if (data.comments) {
+      data.comments.sort((a: any, b: any) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      )
+    }
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchTask()
-    }, [taskId])
+    return data
+  }, [taskId])
+
+  const {
+    data: fetchedTask,
+    loading,
+    isStale,
+    isFromCache,
+    refetch,
+    error: fetchError,
+  } = useOfflineDetail<Task>(
+    fetchTask,
+    CacheKeys.taskDetail(taskId),
+    !!taskId
   )
 
-  const onRefresh = () => {
-    setRefreshing(true)
-    fetchTask()
+  // Use local state for optimistic updates, fallback to fetched data
+  const task = localTask || fetchedTask
+
+  // Sync local state when fetched data changes
+  React.useEffect(() => {
+    if (fetchedTask && !localTask) {
+      setLocalTask(fetchedTask)
+    }
+  }, [fetchedTask])
+
+  const onRefresh = async () => {
+    setLocalTask(null) // Reset local state to get fresh data
+    await refetch()
   }
 
   const getUserName = (user?: { first_name?: string; last_name?: string; email?: string }) => {
@@ -127,27 +141,42 @@ export default function DetailsTacheScreen() {
     if (!task || !canEdit) return
     setShowStatusPicker(false)
 
-    try {
-      const { error } = await supabase
-        .from('tasks')
-        .update({ status: newStatus })
-        .eq('id', task.id)
+    // Optimistic update
+    const oldStatus = task.status
+    setLocalTask({ ...task, status: newStatus })
 
-      if (error) throw error
+    if (isOnline) {
+      try {
+        const { error } = await supabase
+          .from('tasks')
+          .update({ status: newStatus })
+          .eq('id', task.id)
 
-      setTask({ ...task, status: newStatus })
+        if (error) throw error
 
-      // Ajouter à l'historique
-      await supabase.from('task_history').insert({
-        task_id: task.id,
-        user_id: user?.id,
-        action: 'status_changed',
-        old_value: task.status,
-        new_value: newStatus,
+        // Ajouter à l'historique
+        await supabase.from('task_history').insert({
+          task_id: task.id,
+          user_id: user?.id,
+          action: 'status_changed',
+          old_value: oldStatus,
+          new_value: newStatus,
+        })
+      } catch (error) {
+        console.error('Erreur update status:', error)
+        // Rollback on error
+        setLocalTask({ ...task, status: oldStatus })
+        Alert.alert('Erreur', 'Impossible de mettre à jour le statut')
+      }
+    } else {
+      // Queue for offline sync
+      addMutation({
+        type: 'update',
+        table: 'tasks',
+        data: { id: task.id, status: newStatus },
+        maxRetries: 3,
       })
-    } catch (error) {
-      console.error('Erreur update status:', error)
-      Alert.alert('Erreur', 'Impossible de mettre à jour le statut')
+      Alert.alert('Hors ligne', 'Le changement sera synchronisé quand vous serez en ligne')
     }
   }
 
@@ -156,26 +185,51 @@ export default function DetailsTacheScreen() {
 
     const newCompleted = !subtask.is_completed
 
-    try {
-      const { error } = await supabase
-        .from('task_subtasks')
-        .update({
-          is_completed: newCompleted,
-          completed_at: newCompleted ? new Date().toISOString() : null,
-          completed_by: newCompleted ? user?.id : null,
+    // Optimistic update
+    setLocalTask({
+      ...task,
+      subtasks: task.subtasks?.map(s =>
+        s.id === subtask.id ? { ...s, is_completed: newCompleted } : s
+      ),
+    })
+
+    const updateData = {
+      id: subtask.id,
+      is_completed: newCompleted,
+      completed_at: newCompleted ? new Date().toISOString() : null,
+      completed_by: newCompleted ? user?.id : null,
+    }
+
+    if (isOnline) {
+      try {
+        const { error } = await supabase
+          .from('task_subtasks')
+          .update({
+            is_completed: newCompleted,
+            completed_at: newCompleted ? new Date().toISOString() : null,
+            completed_by: newCompleted ? user?.id : null,
+          })
+          .eq('id', subtask.id)
+
+        if (error) throw error
+      } catch (error) {
+        console.error('Erreur toggle subtask:', error)
+        // Rollback
+        setLocalTask({
+          ...task,
+          subtasks: task.subtasks?.map(s =>
+            s.id === subtask.id ? { ...s, is_completed: !newCompleted } : s
+          ),
         })
-        .eq('id', subtask.id)
-
-      if (error) throw error
-
-      setTask({
-        ...task,
-        subtasks: task.subtasks?.map(s =>
-          s.id === subtask.id ? { ...s, is_completed: newCompleted } : s
-        ),
+      }
+    } else {
+      // Queue for offline sync
+      addMutation({
+        type: 'update',
+        table: 'task_subtasks',
+        data: updateData,
+        maxRetries: 3,
       })
-    } catch (error) {
-      console.error('Erreur toggle subtask:', error)
     }
   }
 
@@ -183,33 +237,77 @@ export default function DetailsTacheScreen() {
     if (!newComment.trim() || !task || !user?.id) return
     setSubmitting(true)
 
-    try {
-      const { data, error } = await supabase
-        .from('task_comments')
-        .insert({
+    const commentContent = newComment.trim()
+    const tempId = `temp_${Date.now()}`
+
+    // Optimistic update with temp comment
+    const tempComment = {
+      id: tempId,
+      content: commentContent,
+      created_at: new Date().toISOString(),
+      author: {
+        id: user.id,
+        email: user.email || '',
+        first_name: user.user_metadata?.first_name,
+        last_name: user.user_metadata?.last_name,
+      },
+    }
+
+    setLocalTask({
+      ...task,
+      comments: [...(task.comments || []), tempComment as any],
+    })
+    setNewComment('')
+
+    if (isOnline) {
+      try {
+        const { data, error } = await supabase
+          .from('task_comments')
+          .insert({
+            task_id: task.id,
+            author_id: user.id,
+            content: commentContent,
+          })
+          .select(`
+            id, content, created_at,
+            author:users!author_id(id, email, first_name, last_name)
+          `)
+          .single()
+
+        if (error) throw error
+
+        // Replace temp comment with real one
+        setLocalTask(prev => prev ? {
+          ...prev,
+          comments: prev.comments?.map(c => c.id === tempId ? data : c),
+        } : null)
+      } catch (error) {
+        console.error('Erreur add comment:', error)
+        // Remove temp comment on error
+        setLocalTask(prev => prev ? {
+          ...prev,
+          comments: prev.comments?.filter(c => c.id !== tempId),
+        } : null)
+        setNewComment(commentContent) // Restore the comment text
+        Alert.alert('Erreur', 'Impossible d\'ajouter le commentaire')
+      }
+    } else {
+      // Queue for offline sync
+      addMutation({
+        type: 'create',
+        table: 'task_comments',
+        data: {
           task_id: task.id,
           author_id: user.id,
-          content: newComment.trim(),
-        })
-        .select(`
-          id, content, created_at,
-          author:users!author_id(id, email, first_name, last_name)
-        `)
-        .single()
-
-      if (error) throw error
-
-      setTask({
-        ...task,
-        comments: [...(task.comments || []), data],
+          content: commentContent,
+        },
+        tempId,
+        maxRetries: 3,
       })
-      setNewComment('')
-    } catch (error) {
-      console.error('Erreur add comment:', error)
-      Alert.alert('Erreur', 'Impossible d\'ajouter le commentaire')
-    } finally {
-      setSubmitting(false)
+      Alert.alert('Hors ligne', 'Le commentaire sera synchronisé quand vous serez en ligne')
     }
+
+    setSubmitting(false)
   }
 
   const showAttachmentOptions = () => {
@@ -355,9 +453,18 @@ export default function DetailsTacheScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Indicateur offline/cache */}
+      {(!isOnline || isFromCache) && (
+        <View style={[styles.cacheIndicator, !isOnline && styles.offlineIndicator]}>
+          <Text style={styles.cacheIndicatorText}>
+            {!isOnline ? '📡 Mode hors ligne - Les modifications seront synchronisées' : isStale ? '⏳ Données en cache' : '✓ Cache récent'}
+          </Text>
+        </View>
+      )}
+
       <ScrollView
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#64191E']} />
+          <RefreshControl refreshing={false} onRefresh={onRefresh} colors={['#64191E']} />
         }
       >
         {/* Header */}
@@ -614,6 +721,20 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  cacheIndicator: {
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  offlineIndicator: {
+    backgroundColor: '#FEE2E2',
+  },
+  cacheIndicatorText: {
+    fontSize: 12,
+    color: '#92400E',
+    textAlign: 'center',
   },
   loadingContainer: {
     flex: 1,

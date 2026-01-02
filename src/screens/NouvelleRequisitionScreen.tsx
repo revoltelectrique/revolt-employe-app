@@ -17,6 +17,8 @@ import { useAuth } from '../contexts/AuthContext'
 import { ImagePicker } from '../components'
 import * as FileSystem from 'expo-file-system'
 import { decode } from 'base64-arraybuffer'
+import { useOffline } from '../contexts/OfflineContext'
+import { useOfflineQueue } from '../lib/offlineQueue'
 
 interface ItemLine {
   id: string
@@ -34,6 +36,8 @@ export default function NouvelleRequisitionScreen() {
   const navigation = useNavigation()
   const route = useRoute<any>()
   const { user } = useAuth()
+  const { isOnline } = useOffline()
+  const { addMutation } = useOfflineQueue()
   const [loading, setLoading] = useState(false)
 
   // Récupérer les données pré-remplies si disponibles
@@ -79,74 +83,113 @@ export default function NouvelleRequisitionScreen() {
 
     setLoading(true)
 
-    try {
-      // Générer le numéro de réquisition
-      const { data: lastReq } = await supabase
-        .from('material_requests')
-        .select('request_number')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single()
+    if (isOnline) {
+      try {
+        // Générer le numéro de réquisition
+        const { data: lastReq } = await supabase
+          .from('material_requests')
+          .select('request_number')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single()
 
-      let nextNumber = 100
-      if (lastReq?.request_number) {
-        const match = lastReq.request_number.match(/REQ-(\d+)/)
-        if (match) nextNumber = parseInt(match[1]) + 1
+        let nextNumber = 100
+        if (lastReq?.request_number) {
+          const match = lastReq.request_number.match(/REQ-(\d+)/)
+          if (match) nextNumber = parseInt(match[1]) + 1
+        }
+        const requestNumber = `REQ-${nextNumber}`
+
+        // Créer la réquisition
+        const { data: req, error: reqError } = await supabase
+          .from('material_requests')
+          .insert({
+            request_number: requestNumber,
+            requester_id: user?.id,
+            client_name: clientName.trim(),
+            servicentre_call_number: servicentreNumber.trim(),
+            delivery_location: deliveryLocation.trim(),
+            special_notes: specialNotes.trim() || null,
+            status: 'en_attente',
+          })
+          .select()
+          .single()
+
+        if (reqError) throw reqError
+
+        // Ajouter les items
+        const itemsToInsert = validItems.map((item) => ({
+          material_request_id: req.id,
+          description: item.description.trim(),
+          quantity: parseInt(item.quantity) || 1,
+        }))
+
+        await supabase.from('material_request_items').insert(itemsToInsert)
+
+        // Upload des images si présentes
+        if (images.length > 0) {
+          for (let i = 0; i < images.length; i++) {
+            const uri = images[i]
+            const base64 = await FileSystem.readAsStringAsync(uri, {
+              encoding: FileSystem.EncodingType.Base64,
+            })
+            const fileName = `${req.id}/${Date.now()}_${i}.jpg`
+
+            await supabase.storage
+              .from('material-request-attachments')
+              .upload(fileName, decode(base64), {
+                contentType: 'image/jpeg',
+              })
+          }
+        }
+
+        Alert.alert('Succès', `Réquisition ${requestNumber} créée!`, [
+          { text: 'OK', onPress: () => navigation.goBack() },
+        ])
+      } catch (error) {
+        console.error('Erreur:', error)
+        Alert.alert('Erreur', 'Impossible de créer la réquisition')
       }
-      const requestNumber = `REQ-${nextNumber}`
+    } else {
+      // Mode hors ligne - Ajouter à la queue
+      const tempRequestNumber = `REQ-OFFLINE-${Date.now()}`
 
-      // Créer la réquisition
-      const { data: req, error: reqError } = await supabase
-        .from('material_requests')
-        .insert({
-          request_number: requestNumber,
+      // Queue la création de la réquisition
+      addMutation({
+        type: 'insert',
+        table: 'material_requests',
+        data: {
+          request_number: tempRequestNumber, // Sera remplacé côté serveur
           requester_id: user?.id,
           client_name: clientName.trim(),
           servicentre_call_number: servicentreNumber.trim(),
           delivery_location: deliveryLocation.trim(),
           special_notes: specialNotes.trim() || null,
           status: 'en_attente',
-        })
-        .select()
-        .single()
+          _items: validItems.map((item) => ({
+            description: item.description.trim(),
+            quantity: parseInt(item.quantity) || 1,
+          })),
+        },
+        maxRetries: 5,
+      })
 
-      if (reqError) throw reqError
-
-      // Ajouter les items
-      const itemsToInsert = validItems.map((item) => ({
-        material_request_id: req.id,
-        description: item.description.trim(),
-        quantity: parseInt(item.quantity) || 1,
-      }))
-
-      await supabase.from('material_request_items').insert(itemsToInsert)
-
-      // Upload des images si présentes
       if (images.length > 0) {
-        for (let i = 0; i < images.length; i++) {
-          const uri = images[i]
-          const base64 = await FileSystem.readAsStringAsync(uri, {
-            encoding: FileSystem.EncodingType.Base64,
-          })
-          const fileName = `${req.id}/${Date.now()}_${i}.jpg`
-
-          await supabase.storage
-            .from('material-request-attachments')
-            .upload(fileName, decode(base64), {
-              contentType: 'image/jpeg',
-            })
-        }
+        Alert.alert(
+          'Mode hors ligne',
+          'La réquisition sera créée quand vous serez connecté. Les images ne seront pas envoyées (non supporté hors ligne).',
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        )
+      } else {
+        Alert.alert(
+          'Mode hors ligne',
+          'La réquisition sera créée quand vous serez connecté.',
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        )
       }
-
-      Alert.alert('Succès', `Réquisition ${requestNumber} créée!`, [
-        { text: 'OK', onPress: () => navigation.goBack() },
-      ])
-    } catch (error) {
-      console.error('Erreur:', error)
-      Alert.alert('Erreur', 'Impossible de créer la réquisition')
-    } finally {
-      setLoading(false)
     }
+
+    setLoading(false)
   }
 
   return (
@@ -154,6 +197,15 @@ export default function NouvelleRequisitionScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
+      {/* Indicateur mode hors ligne */}
+      {!isOnline && (
+        <View style={styles.offlineBanner}>
+          <Text style={styles.offlineBannerText}>
+            📡 Mode hors ligne - La réquisition sera créée lors de la reconnexion
+          </Text>
+        </View>
+      )}
+
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
         {/* Informations générales */}
         <View style={styles.section}>
@@ -269,6 +321,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  offlineBanner: {
+    backgroundColor: '#FEE2E2',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  offlineBannerText: {
+    fontSize: 12,
+    color: '#DC2626',
   },
   scroll: {
     flex: 1,

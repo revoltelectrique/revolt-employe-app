@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import {
   View,
   Text,
@@ -7,11 +7,16 @@ import {
   ActivityIndicator,
   Alert,
   TouchableOpacity,
+  RefreshControl,
 } from 'react-native'
 import { useRoute, useNavigation } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { PurchaseOrder } from '../types'
 import { Button, Card, Badge, ConfirmDialog, CommentsSection } from '../components'
+import { useOfflineDetail } from '../hooks/useOfflineData'
+import { CacheKeys, CacheTTL } from '../lib/storage'
+import { useOffline } from '../contexts/OfflineContext'
+import { useOfflineQueue } from '../lib/offlineQueue'
 
 interface LinkedRequisition {
   id: string
@@ -23,16 +28,66 @@ export default function DetailsBCScreen() {
   const navigation = useNavigation()
   const { orderId } = route.params
 
-  const [loading, setLoading] = useState(true)
-  const [order, setOrder] = useState<PurchaseOrder | null>(null)
+  const { isOnline } = useOffline()
+  const { addMutation } = useOfflineQueue()
+
   const [showConfirm, setShowConfirm] = useState(false)
   const [updating, setUpdating] = useState(false)
   const [userRole, setUserRole] = useState('')
   const [currentUserId, setCurrentUserId] = useState('')
   const [linkedRequisition, setLinkedRequisition] = useState<LinkedRequisition | null>(null)
+  const [localOrder, setLocalOrder] = useState<PurchaseOrder | null>(null)
+
+  // Fetch avec cache offline
+  const fetchOrder = useCallback(async (): Promise<PurchaseOrder | null> => {
+    const { data, error } = await supabase
+      .from('purchase_orders')
+      .select(`
+        *,
+        requester:users!requester_id(email, first_name, last_name),
+        items:purchase_order_items(*)
+      `)
+      .eq('id', orderId)
+      .single()
+
+    if (error) throw error
+
+    // Récupérer la réquisition liée si elle existe
+    if (data?.material_request_id) {
+      const { data: reqData } = await supabase
+        .from('material_requests')
+        .select('id, request_number')
+        .eq('id', data.material_request_id)
+        .single()
+
+      if (reqData) {
+        setLinkedRequisition(reqData)
+      }
+    }
+
+    return data
+  }, [orderId])
+
+  const {
+    data: order,
+    loading,
+    isFromCache,
+    isStale,
+    refetch,
+  } = useOfflineDetail<PurchaseOrder>(
+    fetchOrder,
+    CacheKeys.purchaseOrderDetail(orderId),
+    !!orderId
+  )
+
+  // Sync local state with fetched data
+  useEffect(() => {
+    if (order) {
+      setLocalOrder(order)
+    }
+  }, [order])
 
   useEffect(() => {
-    fetchOrder()
     fetchUserRole()
   }, [orderId])
 
@@ -51,64 +106,57 @@ export default function DetailsBCScreen() {
 
   const canEdit = ['admin', 'contremaitre', 'contremaître'].includes(userRole)
 
-  const fetchOrder = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('purchase_orders')
-        .select(`
-          *,
-          requester:users!requester_id(email, first_name, last_name),
-          items:purchase_order_items(*)
-        `)
-        .eq('id', orderId)
-        .single()
-
-      if (error) throw error
-      setOrder(data)
-
-      // Récupérer la réquisition liée si elle existe
-      if (data.material_request_id) {
-        const { data: reqData } = await supabase
-          .from('material_requests')
-          .select('id, request_number')
-          .eq('id', data.material_request_id)
-          .single()
-
-        if (reqData) {
-          setLinkedRequisition(reqData)
-        }
-      }
-    } catch (error) {
-      console.error('Erreur:', error)
-      Alert.alert('Erreur', 'Impossible de charger le bon de commande')
-      navigation.goBack()
-    } finally {
-      setLoading(false)
-    }
-  }
+  // Utiliser localOrder pour les mises à jour optimistes
+  const displayOrder = localOrder || order
 
   const handleToggleStatus = async () => {
-    if (!order) return
+    if (!displayOrder) return
 
+    const previousStatus = displayOrder.status
+    const newStatus = previousStatus === 'en_attente' ? 'traite' : 'en_attente'
+
+    // Mise à jour optimiste
+    setLocalOrder({ ...displayOrder, status: newStatus })
     setUpdating(true)
-    const newStatus = order.status === 'en_attente' ? 'traite' : 'en_attente'
 
-    try {
-      const { error } = await supabase
-        .from('purchase_orders')
-        .update({ status: newStatus, updated_at: new Date().toISOString() })
-        .eq('id', order.id)
+    if (isOnline) {
+      try {
+        const { error } = await supabase
+          .from('purchase_orders')
+          .update({ status: newStatus, updated_at: new Date().toISOString() })
+          .eq('id', displayOrder.id)
 
-      if (error) throw error
+        if (error) throw error
 
-      setOrder({ ...order, status: newStatus })
-      setShowConfirm(false)
-      Alert.alert('Succès', `Statut changé à "${newStatus === 'traite' ? 'Traité' : 'En attente'}"`)
-    } catch (error) {
-      console.error('Erreur:', error)
-      Alert.alert('Erreur', 'Impossible de changer le statut')
-    } finally {
+        setShowConfirm(false)
+        Alert.alert('Succès', `Statut changé à "${newStatus === 'traite' ? 'Traité' : 'En attente'}"`)
+        refetch() // Rafraîchir le cache
+      } catch (error) {
+        console.error('Erreur:', error)
+        // Rollback
+        setLocalOrder({ ...displayOrder, status: previousStatus })
+        Alert.alert('Erreur', 'Impossible de changer le statut')
+      } finally {
+        setUpdating(false)
+      }
+    } else {
+      // Mode hors ligne - ajouter à la queue
+      addMutation({
+        type: 'update',
+        table: 'purchase_orders',
+        data: {
+          id: displayOrder.id,
+          status: newStatus,
+          updated_at: new Date().toISOString(),
+        },
+        maxRetries: 3,
+      })
       setUpdating(false)
+      setShowConfirm(false)
+      Alert.alert(
+        'Hors ligne',
+        'Le changement de statut sera synchronisé quand vous serez en ligne.'
+      )
     }
   }
 
@@ -123,21 +171,21 @@ export default function DetailsBCScreen() {
   }
 
   const getRequesterName = () => {
-    if (order?.requester?.first_name) {
-      return `${order.requester.first_name} ${order.requester.last_name || ''}`
+    if (displayOrder?.requester?.first_name) {
+      return `${displayOrder.requester.first_name} ${displayOrder.requester.last_name || ''}`
     }
-    return order?.requester?.email || '-'
+    return displayOrder?.requester?.email || '-'
   }
 
   const calculateTotal = () => {
-    if (!order?.items || order.items.length === 0) return null
-    const total = order.items.reduce((sum, item) => {
+    if (!displayOrder?.items || displayOrder.items.length === 0) return null
+    const total = displayOrder.items.reduce((sum, item) => {
       return sum + (item.price ? item.price * item.quantity : 0)
     }, 0)
     return total > 0 ? total : null
   }
 
-  if (loading) {
+  if (loading && !displayOrder) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#64191E" />
@@ -145,22 +193,40 @@ export default function DetailsBCScreen() {
     )
   }
 
-  if (!order) return null
+  if (!displayOrder) return null
 
   const total = calculateTotal()
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView
+      style={styles.container}
+      refreshControl={
+        <RefreshControl
+          refreshing={loading && !!displayOrder}
+          onRefresh={refetch}
+          colors={['#64191E']}
+        />
+      }
+    >
+      {/* Indicateur offline/cache */}
+      {(!isOnline || isFromCache) && (
+        <View style={[styles.cacheIndicator, !isOnline && styles.offlineIndicator]}>
+          <Text style={styles.cacheIndicatorText}>
+            {!isOnline ? '📡 Mode hors ligne' : isStale ? '⏳ Données en cache' : '✓ Cache récent'}
+          </Text>
+        </View>
+      )}
+
       {/* Header */}
       <Card style={styles.headerCard}>
         <View style={styles.headerRow}>
-          <Text style={styles.poNumber}>{order.po_number}</Text>
+          <Text style={styles.poNumber}>{displayOrder.po_number}</Text>
           <Badge
-            label={order.status === 'en_attente' ? 'En attente' : 'Traité'}
-            variant={order.status === 'en_attente' ? 'pending' : 'success'}
+            label={displayOrder.status === 'en_attente' ? 'En attente' : 'Traité'}
+            variant={displayOrder.status === 'en_attente' ? 'pending' : 'success'}
           />
         </View>
-        <Text style={styles.date}>Créé le {formatDate(order.created_at)}</Text>
+        <Text style={styles.date}>Créé le {formatDate(displayOrder.created_at)}</Text>
       </Card>
 
       {/* Informations */}
@@ -169,7 +235,7 @@ export default function DetailsBCScreen() {
 
         <View style={styles.infoRow}>
           <Text style={styles.label}>Fournisseur</Text>
-          <Text style={styles.value}>{order.supplier_name}</Text>
+          <Text style={styles.value}>{displayOrder.supplier_name}</Text>
         </View>
 
         <View style={styles.infoRow}>
@@ -179,18 +245,18 @@ export default function DetailsBCScreen() {
 
         <View style={styles.infoRow}>
           <Text style={styles.label}>Facturable</Text>
-          <Text style={styles.value}>{order.is_billable ? 'Oui' : 'Non'}</Text>
+          <Text style={styles.value}>{displayOrder.is_billable ? 'Oui' : 'Non'}</Text>
         </View>
 
-        {order.is_billable && (
+        {displayOrder.is_billable && (
           <>
             <View style={styles.infoRow}>
               <Text style={styles.label}>N° Servicentre</Text>
-              <Text style={styles.value}>{order.servicentre_call_number || '-'}</Text>
+              <Text style={styles.value}>{displayOrder.servicentre_call_number || '-'}</Text>
             </View>
             <View style={styles.infoRow}>
               <Text style={styles.label}>Client</Text>
-              <Text style={styles.value}>{order.client_name || '-'}</Text>
+              <Text style={styles.value}>{displayOrder.client_name || '-'}</Text>
             </View>
           </>
         )}
@@ -213,10 +279,10 @@ export default function DetailsBCScreen() {
       {/* Items */}
       <Card style={styles.section}>
         <Text style={styles.sectionTitle}>
-          Produits ({order.items?.length || 0})
+          Produits ({displayOrder.items?.length || 0})
         </Text>
 
-        {order.items?.map((item, index) => (
+        {displayOrder.items?.map((item, index) => (
           <View key={item.id} style={styles.itemCard}>
             <View style={styles.itemHeader}>
               <Text style={styles.itemIndex}>#{index + 1}</Text>
@@ -243,7 +309,7 @@ export default function DetailsBCScreen() {
       {currentUserId && (
         <CommentsSection
           documentType="purchase_order"
-          documentId={order.id}
+          documentId={displayOrder.id}
           currentUserId={currentUserId}
         />
       )}
@@ -255,7 +321,7 @@ export default function DetailsBCScreen() {
             title="Modifier le bon de commande"
             onPress={() => {
               (navigation as any).navigate('ModifierBC', {
-                orderId: order.id,
+                orderId: displayOrder.id,
               })
             }}
             variant="outline"
@@ -263,9 +329,9 @@ export default function DetailsBCScreen() {
           />
         )}
         <Button
-          title={order.status === 'en_attente' ? 'Marquer comme traité' : 'Réouvrir'}
+          title={displayOrder.status === 'en_attente' ? 'Marquer comme traité' : 'Réouvrir'}
           onPress={() => setShowConfirm(true)}
-          variant={order.status === 'en_attente' ? 'primary' : 'outline'}
+          variant={displayOrder.status === 'en_attente' ? 'primary' : 'outline'}
         />
       </View>
 
@@ -276,11 +342,11 @@ export default function DetailsBCScreen() {
         visible={showConfirm}
         title="Changer le statut"
         message={
-          order.status === 'en_attente'
+          displayOrder.status === 'en_attente'
             ? 'Voulez-vous marquer ce bon de commande comme traité?'
             : 'Voulez-vous réouvrir ce bon de commande?'
         }
-        confirmLabel={order.status === 'en_attente' ? 'Traiter' : 'Réouvrir'}
+        confirmLabel={displayOrder.status === 'en_attente' ? 'Traiter' : 'Réouvrir'}
         onConfirm={handleToggleStatus}
         onCancel={() => setShowConfirm(false)}
         loading={updating}
@@ -298,6 +364,19 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  cacheIndicator: {
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  offlineIndicator: {
+    backgroundColor: '#FEE2E2',
+  },
+  cacheIndicatorText: {
+    fontSize: 12,
+    color: '#92400E',
   },
   headerCard: {
     margin: 16,

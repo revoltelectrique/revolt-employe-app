@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useMemo } from 'react'
 import {
   View,
   Text,
@@ -8,10 +8,14 @@ import {
   RefreshControl,
   ActivityIndicator,
 } from 'react-native'
-import { useFocusEffect, useNavigation } from '@react-navigation/native'
+import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { Conversation } from '../types'
 import { SearchBar, Badge, EmptyState } from '../components'
+import { useOfflineData } from '../hooks/useOfflineData'
+import { CacheKeys, CacheTTL } from '../lib/storage'
+import { useOffline } from '../contexts/OfflineContext'
+import { useAuth } from '../contexts/AuthContext'
 
 type FilterType = 'all' | 'ouverte' | 'fermee'
 
@@ -23,57 +27,61 @@ const statusStyles = {
 
 export default function ConversationsListScreen() {
   const navigation = useNavigation<any>()
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
-  const [conversations, setConversations] = useState<Conversation[]>([])
+  const { user } = useAuth()
+  const { isOnline } = useOffline()
   const [filter, setFilter] = useState<FilterType>('all')
   const [searchQuery, setSearchQuery] = useState('')
 
-  const fetchConversations = async () => {
-    try {
-      let query = supabase
-        .from('conversations')
-        .select(`
-          *,
-          creator:users!created_by(email, first_name, last_name)
-        `)
-        .order('updated_at', { ascending: false })
+  // Fetch avec cache offline
+  const fetchConversations = useCallback(async (): Promise<Conversation[]> => {
+    let query = supabase
+      .from('conversations')
+      .select(`
+        *,
+        creator:users!created_by(email, first_name, last_name)
+      `)
+      .order('updated_at', { ascending: false })
 
-      if (filter === 'ouverte') {
-        query = query.eq('status', 'ouverte')
-      } else if (filter === 'fermee') {
-        query = query.in('status', ['fermee', 'archivee'])
-      }
-
-      const { data, error } = await query
-
-      if (error) throw error
-      setConversations(data || [])
-    } catch (error) {
-      console.error('Erreur fetch conversations:', error)
-    } finally {
-      setLoading(false)
-      setRefreshing(false)
+    if (filter === 'ouverte') {
+      query = query.eq('status', 'ouverte')
+    } else if (filter === 'fermee') {
+      query = query.in('status', ['fermee', 'archivee'])
     }
-  }
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchConversations()
-    }, [filter])
+    const { data, error } = await query
+    if (error) throw error
+    return data || []
+  }, [filter])
+
+  // Cache key inclut le filtre
+  const cacheKey = useMemo(
+    () => `${CacheKeys.conversationsList(user?.id || 'guest')}:${filter}`,
+    [user?.id, filter]
   )
 
-  const onRefresh = () => {
-    setRefreshing(true)
-    fetchConversations()
+  const {
+    data: conversations,
+    loading,
+    isStale,
+    isFromCache,
+    refetch,
+  } = useOfflineData<Conversation[]>(fetchConversations, {
+    cacheKey,
+    ttl: CacheTTL.MEDIUM,
+    strategy: 'stale-while-revalidate',
+    dependencies: [filter],
+  })
+
+  const onRefresh = async () => {
+    await refetch()
   }
 
-  const filteredConversations = conversations.filter((conv) => {
+  const filteredConversations = (conversations || []).filter((conv) => {
     if (!searchQuery) return true
     const query = searchQuery.toLowerCase()
     return (
-      conv.servicentre_number.toLowerCase().includes(query) ||
-      conv.client_name.toLowerCase().includes(query) ||
+      conv.servicentre_number?.toLowerCase().includes(query) ||
+      conv.client_name?.toLowerCase().includes(query) ||
       conv.location?.toLowerCase().includes(query)
     )
   })
@@ -176,6 +184,15 @@ export default function ConversationsListScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Indicateur offline/cache */}
+      {(!isOnline || isFromCache) && (
+        <View style={[styles.cacheIndicator, !isOnline && styles.offlineIndicator]}>
+          <Text style={styles.cacheIndicatorText}>
+            {!isOnline ? '📡 Mode hors ligne' : isStale ? '⏳ Données en cache' : '✓ Cache récent'}
+          </Text>
+        </View>
+      )}
+
       {/* Recherche */}
       <SearchBar
         value={searchQuery}
@@ -203,7 +220,7 @@ export default function ConversationsListScreen() {
         keyExtractor={(item) => item.id}
         renderItem={renderConversation}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#64191E']} />
+          <RefreshControl refreshing={false} onRefresh={onRefresh} colors={['#64191E']} />
         }
         contentContainerStyle={styles.list}
         ListEmptyComponent={
@@ -232,6 +249,19 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  cacheIndicator: {
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  offlineIndicator: {
+    backgroundColor: '#FEE2E2',
+  },
+  cacheIndicatorText: {
+    fontSize: 12,
+    color: '#92400E',
   },
   loadingContainer: {
     flex: 1,

@@ -7,6 +7,8 @@ import { Text, View, ActivityIndicator, StyleSheet } from 'react-native'
 import * as Notifications from 'expo-notifications'
 
 import { AuthProvider, useAuth } from './src/contexts/AuthContext'
+import { OfflineProvider } from './src/contexts/OfflineContext'
+import { OfflineBanner, OfflineIndicator } from './src/components/OfflineBanner'
 import { registerForPushNotificationsAsync, savePushToken } from './src/lib/notifications'
 import LoginScreen from './src/screens/LoginScreen'
 import HomeScreen from './src/screens/HomeScreen'
@@ -76,7 +78,9 @@ function MainTabs() {
   const canAccessErpBeta = isAdmin || profile?.can_access_erp_beta
 
   return (
-    <Tab.Navigator
+    <View style={{ flex: 1 }}>
+      <OfflineBanner position="top" showPendingCount={true} />
+      <Tab.Navigator
       screenOptions={({ route }) => ({
         tabBarIcon: ({ focused }) => <TabIcon name={route.name} focused={focused} />,
         tabBarActiveTintColor: '#64191E',
@@ -140,6 +144,7 @@ function MainTabs() {
         options={{ headerShown: false }}
       />
     </Tab.Navigator>
+    </View>
   )
 }
 
@@ -332,10 +337,12 @@ export default function App() {
 
   return (
     <AuthProvider>
-      <NavigationContainer ref={navigationRef}>
-        <StatusBar style="light" />
-        <AppNavigator navigationRef={navigationRef} />
-      </NavigationContainer>
+      <OfflineProvider autoSyncOnReconnect={true} autoSyncOnForeground={true}>
+        <NavigationContainer ref={navigationRef}>
+          <StatusBar style="light" />
+          <AppNavigator navigationRef={navigationRef} />
+        </NavigationContainer>
+      </OfflineProvider>
     </AuthProvider>
   )
 }

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React from 'react'
 import {
   View,
   Text,
@@ -8,10 +8,13 @@ import {
   RefreshControl,
   ActivityIndicator,
 } from 'react-native'
-import { useNavigation, useFocusEffect } from '@react-navigation/native'
+import { useNavigation } from '@react-navigation/native'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import { CompanyNews, NewsCategory, Task, TaskStatus, TaskPriority } from '../types'
+import { useOfflineList } from '../hooks/useOfflineData'
+import { CacheKeys } from '../lib/storage'
+import { useOffline } from '../contexts/OfflineContext'
 
 const categoryStyles: Record<NewsCategory, { bg: string; text: string; label: string }> = {
   info: { bg: '#EFF6FF', text: '#1D4ED8', label: 'Information' },
@@ -44,55 +47,64 @@ function getGreeting() {
 export default function HomeScreen() {
   const navigation = useNavigation<any>()
   const { profile, user } = useAuth()
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
-  const [tasks, setTasks] = useState<Task[]>([])
-  const [news, setNews] = useState<CompanyNews[]>([])
+  const { isOnline } = useOffline()
 
   const displayName = profile?.first_name || profile?.email?.split('@')[0] || 'Employé'
 
-  const fetchData = async () => {
-    try {
-      // Tâches actives de l'utilisateur
-      if (user?.id) {
-        const { data: tasksData } = await supabase
-          .from('tasks')
-          .select('*')
-          .or(`created_by.eq.${user.id},assigned_to.eq.${user.id}`)
-          .not('status', 'in', '("termine","annule")')
-          .order('priority', { ascending: false })
-          .order('created_at', { ascending: false })
-          .limit(5)
-
-        setTasks(tasksData || [])
-      }
-
-      // Nouvelles
-      const { data: newsData } = await supabase
-        .from('company_news')
-        .select('*')
-        .eq('is_published', true)
-        .order('published_at', { ascending: false })
-        .limit(5)
-
-      setNews(newsData || [])
-    } catch (error) {
-      console.error('Erreur fetch data:', error)
-    } finally {
-      setLoading(false)
-      setRefreshing(false)
-    }
+  // Fetch tâches avec cache offline
+  const fetchTasks = async (): Promise<Task[]> => {
+    if (!user?.id) return []
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('*')
+      .or(`created_by.eq.${user.id},assigned_to.eq.${user.id}`)
+      .not('status', 'in', '("termine","annule")')
+      .order('priority', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(5)
+    if (error) throw error
+    return data || []
   }
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchData()
-    }, [])
+  // Fetch news avec cache offline
+  const fetchNews = async (): Promise<CompanyNews[]> => {
+    const { data, error } = await supabase
+      .from('company_news')
+      .select('*')
+      .eq('is_published', true)
+      .order('published_at', { ascending: false })
+      .limit(5)
+    if (error) throw error
+    return data || []
+  }
+
+  const {
+    data: tasks,
+    loading: tasksLoading,
+    isStale: tasksStale,
+    refetch: refetchTasks,
+  } = useOfflineList<Task>(
+    fetchTasks,
+    CacheKeys.tasksList(user?.id || 'guest'),
+    [user?.id]
   )
 
-  const onRefresh = () => {
-    setRefreshing(true)
-    fetchData()
+  const {
+    data: news,
+    loading: newsLoading,
+    isStale: newsStale,
+    refetch: refetchNews,
+  } = useOfflineList<CompanyNews>(
+    fetchNews,
+    CacheKeys.news(),
+    []
+  )
+
+  const loading = tasksLoading && newsLoading
+  const refreshing = false // Géré par le hook
+
+  const onRefresh = async () => {
+    await Promise.all([refetchTasks(), refetchNews()])
   }
 
   const formatDate = (dateString: string | null) => {
@@ -122,7 +134,19 @@ export default function HomeScreen() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.greeting}>{getGreeting()}, {displayName}!</Text>
-        <Text style={styles.subtitle}>Portail Employé ReVolt</Text>
+        <View style={styles.subtitleRow}>
+          <Text style={styles.subtitle}>Portail Employé ReVolt</Text>
+          {!isOnline && (
+            <View style={styles.offlineBadge}>
+              <Text style={styles.offlineBadgeText}>Hors ligne</Text>
+            </View>
+          )}
+          {isOnline && (tasksStale || newsStale) && (
+            <View style={styles.staleBadge}>
+              <Text style={styles.staleBadgeText}>Données en cache</Text>
+            </View>
+          )}
+        </View>
       </View>
 
       {/* Actions rapides */}
@@ -155,8 +179,8 @@ export default function HomeScreen() {
             <Text style={styles.seeAll}>Voir tout</Text>
           </TouchableOpacity>
         </View>
-        {tasks.length > 0 ? (
-          tasks.map((task) => {
+        {(tasks || []).length > 0 ? (
+          (tasks || []).map((task) => {
             const status = statusLabels[task.status]
             const priorityColor = priorityColors[task.priority]
             return (
@@ -194,8 +218,8 @@ export default function HomeScreen() {
       {/* Nouvelles */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Dernières nouvelles</Text>
-        {news.length > 0 ? (
-          news.map((item) => {
+        {(news || []).length > 0 ? (
+          (news || []).map((item) => {
             const style = categoryStyles[item.category]
             return (
               <View
@@ -252,6 +276,34 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: 'rgba(255,255,255,0.8)',
     marginTop: 4,
+  },
+  subtitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    gap: 8,
+  },
+  offlineBadge: {
+    backgroundColor: '#EF4444',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  offlineBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  staleBadge: {
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  staleBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '500',
   },
   section: {
     padding: 16,

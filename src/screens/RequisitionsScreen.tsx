@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useMemo } from 'react'
 import {
   View,
   Text,
@@ -9,70 +9,76 @@ import {
   ActivityIndicator,
   Platform,
 } from 'react-native'
-import { useFocusEffect, useNavigation } from '@react-navigation/native'
+import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { MaterialRequest } from '../types'
 import { SearchBar, Badge, EmptyState } from '../components'
+import { useOfflineData } from '../hooks/useOfflineData'
+import { CacheKeys, CacheTTL } from '../lib/storage'
+import { useOffline } from '../contexts/OfflineContext'
 
 type FilterType = 'all' | 'en_attente' | 'traite' | 'mine'
 
 export default function RequisitionsScreen() {
   const navigation = useNavigation<any>()
   const { user } = useAuth()
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
-  const [requests, setRequests] = useState<MaterialRequest[]>([])
+  const { isOnline } = useOffline()
   const [filter, setFilter] = useState<FilterType>('all')
   const [searchQuery, setSearchQuery] = useState('')
 
-  const fetchRequests = async () => {
-    try {
-      let query = supabase
-        .from('material_requests')
-        .select(`
-          *,
-          requester:users!requester_id(email, first_name, last_name),
-          items:material_request_items(*)
-        `)
-        .order('created_at', { ascending: false })
+  // Fetch avec cache offline
+  const fetchRequests = useCallback(async (): Promise<MaterialRequest[]> => {
+    let query = supabase
+      .from('material_requests')
+      .select(`
+        *,
+        requester:users!requester_id(email, first_name, last_name),
+        items:material_request_items(*)
+      `)
+      .order('created_at', { ascending: false })
 
-      if (filter === 'mine' && user?.id) {
-        query = query.eq('requester_id', user.id)
-      } else if (filter === 'en_attente' || filter === 'traite') {
-        query = query.eq('status', filter)
-      }
-
-      const { data, error } = await query
-
-      if (error) throw error
-      setRequests(data || [])
-    } catch (error) {
-      console.error('Erreur fetch requests:', error)
-    } finally {
-      setLoading(false)
-      setRefreshing(false)
+    if (filter === 'mine' && user?.id) {
+      query = query.eq('requester_id', user.id)
+    } else if (filter === 'en_attente' || filter === 'traite') {
+      query = query.eq('status', filter)
     }
-  }
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchRequests()
-    }, [filter])
+    const { data, error } = await query
+    if (error) throw error
+    return data || []
+  }, [filter, user?.id])
+
+  // Cache key inclut le filtre
+  const cacheKey = useMemo(
+    () => `${CacheKeys.requisitionsList(user?.id || 'guest')}:${filter}`,
+    [user?.id, filter]
   )
 
-  const onRefresh = () => {
-    setRefreshing(true)
-    fetchRequests()
+  const {
+    data: requests,
+    loading,
+    isStale,
+    isFromCache,
+    refetch,
+  } = useOfflineData<MaterialRequest[]>(fetchRequests, {
+    cacheKey,
+    ttl: CacheTTL.MEDIUM,
+    strategy: 'stale-while-revalidate',
+    dependencies: [filter, user?.id],
+  })
+
+  const onRefresh = async () => {
+    await refetch()
   }
 
-  const filteredRequests = requests.filter((request) => {
+  const filteredRequests = (requests || []).filter((request) => {
     if (!searchQuery) return true
     const query = searchQuery.toLowerCase()
     return (
-      request.request_number.toLowerCase().includes(query) ||
-      request.client_name.toLowerCase().includes(query) ||
-      request.servicentre_call_number.toLowerCase().includes(query)
+      request.request_number?.toLowerCase().includes(query) ||
+      request.client_name?.toLowerCase().includes(query) ||
+      request.servicentre_call_number?.toLowerCase().includes(query)
     )
   })
 
@@ -145,6 +151,15 @@ export default function RequisitionsScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Indicateur offline/cache */}
+      {(!isOnline || isFromCache) && (
+        <View style={[styles.cacheIndicator, !isOnline && styles.offlineIndicator]}>
+          <Text style={styles.cacheIndicatorText}>
+            {!isOnline ? '📡 Mode hors ligne' : isStale ? '⏳ Données en cache' : '✓ Cache récent'}
+          </Text>
+        </View>
+      )}
+
       {/* Recherche */}
       <SearchBar
         value={searchQuery}
@@ -172,7 +187,7 @@ export default function RequisitionsScreen() {
         keyExtractor={(item) => item.id}
         renderItem={renderRequest}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#2563EB']} />
+          <RefreshControl refreshing={false} onRefresh={onRefresh} colors={['#2563EB']} />
         }
         contentContainerStyle={styles.list}
         ListEmptyComponent={
@@ -193,6 +208,19 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  cacheIndicator: {
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  offlineIndicator: {
+    backgroundColor: '#FEE2E2',
+  },
+  cacheIndicatorText: {
+    fontSize: 12,
+    color: '#92400E',
   },
   loadingContainer: {
     flex: 1,

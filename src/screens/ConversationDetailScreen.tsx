@@ -5,12 +5,17 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  RefreshControl,
+  ScrollView,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { Conversation, ConversationMessage } from '../types'
+import { useOffline } from '../contexts/OfflineContext'
+import { useOfflineQueue } from '../lib/offlineQueue'
+import { CacheKeys, setCachedData, getStaleOrFreshData, CacheTTL } from '../lib/storage'
 
 // Import des onglets
 import ConversationInfoTab from '../components/conversation/ConversationInfoTab'
@@ -24,58 +29,129 @@ export default function ConversationDetailScreen() {
   const route = useRoute<any>()
   const { user, profile } = useAuth()
   const insets = useSafeAreaInsets()
+  const { isOnline } = useOffline()
+  const { addMutation } = useOfflineQueue()
 
   const conversationId = route.params?.conversationId
 
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [isFromCache, setIsFromCache] = useState(false)
+  const [isStale, setIsStale] = useState(false)
   const [activeTab, setActiveTab] = useState<TabType>('chat')
   const [conversation, setConversation] = useState<Conversation | null>(null)
   const [messages, setMessages] = useState<ConversationMessage[]>([])
 
-  const fetchData = async () => {
+  const fetchFromNetwork = async () => {
+    // Fetch conversation
+    const { data: convData, error: convError } = await supabase
+      .from('conversations')
+      .select(`
+        *,
+        creator:users!created_by(email, first_name, last_name)
+      `)
+      .eq('id', conversationId)
+      .single()
+
+    if (convError) throw convError
+
+    // Fetch messages
+    const { data: msgData, error: msgError } = await supabase
+      .from('conversation_messages')
+      .select(`
+        *,
+        author:users!author_id(id, email, first_name, last_name),
+        attachments:message_attachments(*)
+      `)
+      .eq('conversation_id', conversationId)
+      .eq('is_deleted', false)
+      .order('created_at', { ascending: true })
+
+    if (msgError) throw msgError
+
+    return { conversation: convData, messages: msgData || [] }
+  }
+
+  const fetchData = async (forceNetwork = false) => {
     try {
-      // Fetch conversation
-      const { data: convData, error: convError } = await supabase
-        .from('conversations')
-        .select(`
-          *,
-          creator:users!created_by(email, first_name, last_name)
-        `)
-        .eq('id', conversationId)
-        .single()
+      // Try cache first if offline or stale-while-revalidate
+      const cacheKey = CacheKeys.conversationDetail(conversationId)
+      const messagesCacheKey = CacheKeys.conversationMessages(conversationId)
+      const cachedConv = getStaleOrFreshData<Conversation>(cacheKey)
+      const cachedMessages = getStaleOrFreshData<ConversationMessage[]>(messagesCacheKey)
 
-      if (convError) throw convError
-      setConversation(convData)
+      if (!forceNetwork && cachedConv && cachedMessages) {
+        setConversation(cachedConv.data)
+        setMessages(cachedMessages.data)
+        setIsFromCache(true)
+        setIsStale(cachedConv.isStale || cachedMessages.isStale)
+        setLoading(false)
 
-      // Fetch messages
-      const { data: msgData, error: msgError } = await supabase
-        .from('conversation_messages')
-        .select(`
-          *,
-          author:users!author_id(id, email, first_name, last_name),
-          attachments:message_attachments(*)
-        `)
-        .eq('conversation_id', conversationId)
-        .eq('is_deleted', false)
-        .order('created_at', { ascending: true })
+        // If online, revalidate in background
+        if (isOnline) {
+          fetchFromNetwork().then(({ conversation: conv, messages: msgs }) => {
+            setConversation(conv)
+            setMessages(msgs)
+            setIsFromCache(false)
+            setIsStale(false)
+            setCachedData(cacheKey, conv, CacheTTL.SHORT)
+            setCachedData(messagesCacheKey, msgs, CacheTTL.SHORT)
+          }).catch(console.error)
+        }
+        return
+      }
 
-      if (msgError) throw msgError
-      setMessages(msgData || [])
+      // Fetch from network
+      if (isOnline || forceNetwork) {
+        const { conversation: conv, messages: msgs } = await fetchFromNetwork()
+        setConversation(conv)
+        setMessages(msgs)
+        setIsFromCache(false)
+        setIsStale(false)
+
+        // Update cache
+        setCachedData(cacheKey, conv, CacheTTL.SHORT)
+        setCachedData(messagesCacheKey, msgs, CacheTTL.SHORT)
+      } else if (cachedConv) {
+        // Use stale cache when offline
+        setConversation(cachedConv.data)
+        setMessages(cachedMessages?.data || [])
+        setIsFromCache(true)
+        setIsStale(true)
+      }
     } catch (error) {
       console.error('Erreur fetch:', error)
+      // Try cache on error
+      const cachedConv = getStaleOrFreshData<Conversation>(CacheKeys.conversationDetail(conversationId))
+      const cachedMessages = getStaleOrFreshData<ConversationMessage[]>(CacheKeys.conversationMessages(conversationId))
+      if (cachedConv) {
+        setConversation(cachedConv.data)
+        setMessages(cachedMessages?.data || [])
+        setIsFromCache(true)
+        setIsStale(true)
+      }
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
+  }
+
+  const onRefresh = async () => {
+    if (!isOnline) return
+    setRefreshing(true)
+    await fetchData(true)
   }
 
   useFocusEffect(
     useCallback(() => {
       fetchData()
-    }, [conversationId])
+    }, [conversationId, isOnline])
   )
 
-  // Real-time subscription pour les messages
+  // Real-time subscription pour les messages (seulement en ligne)
   useEffect(() => {
+    if (!isOnline) return
+
     const channel = supabase
       .channel(`conversation-detail-${conversationId}`)
       .on(
@@ -101,7 +177,10 @@ export default function ConversationDetailScreen() {
             setMessages((prev) => {
               const exists = prev.some(m => m.id === data.id)
               if (exists) return prev
-              return [...prev, data]
+              // Update cache with new message
+              const updated = [...prev, data]
+              setCachedData(CacheKeys.conversationMessages(conversationId), updated, CacheTTL.SHORT)
+              return updated
             })
           }
         }
@@ -111,7 +190,7 @@ export default function ConversationDetailScreen() {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [conversationId])
+  }, [conversationId, isOnline])
 
   // Extraire les photos des messages pour l'onglet Dossier
   const photosFromChat = messages
@@ -140,6 +219,15 @@ export default function ConversationDetailScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Indicateur offline/cache */}
+      {(!isOnline || isFromCache) && (
+        <View style={[styles.cacheIndicator, !isOnline && styles.offlineIndicator]}>
+          <Text style={styles.cacheIndicatorText}>
+            {!isOnline ? '📡 Mode hors ligne - Les messages seront synchronisés' : isStale ? '⏳ Données en cache' : '✓ Cache récent'}
+          </Text>
+        </View>
+      )}
+
       {/* Header avec info client */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
@@ -221,6 +309,19 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  cacheIndicator: {
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  offlineIndicator: {
+    backgroundColor: '#FEE2E2',
+  },
+  cacheIndicatorText: {
+    fontSize: 12,
+    color: '#92400E',
   },
   header: {
     flexDirection: 'row',

@@ -26,6 +26,8 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
 import { notifyConversationMessage } from '../../lib/notifications'
 import { Conversation, ConversationMessage, MessageType, User } from '../../types'
+import { useOffline } from '../../contexts/OfflineContext'
+import { useOfflineQueue } from '../../lib/offlineQueue'
 
 const messageTypeLabels: Record<MessageType, { label: string; color: string; icon: string }> = {
   general: { label: 'Message', color: '#6B7280', icon: '💬' },
@@ -51,6 +53,8 @@ export default function ConversationChatTab({
   currentUserName,
 }: ConversationChatTabProps) {
   const { user, profile } = useAuth()
+  const { isOnline } = useOffline()
+  const { addMutation, mutations } = useOfflineQueue()
   const flatListRef = useRef<FlatList>(null)
   const insets = useSafeAreaInsets()
 
@@ -212,74 +216,126 @@ export default function ConversationChatTab({
     setShowMentions(false)
     Keyboard.dismiss()
 
-    try {
-      const location = await getCurrentLocation()
-      const mentionedUserIds = extractMentions(content)
+    const tempId = `temp-${Date.now()}`
+    const location = await getCurrentLocation()
+    const mentionedUserIds = extractMentions(content)
 
-      const { data: msg, error: msgError } = await supabase
-        .from('conversation_messages')
-        .insert({
+    // Créer un message temporaire pour affichage immédiat (optimistic UI)
+    const tempMsg: ConversationMessage = {
+      id: tempId,
+      conversation_id: conversation.id,
+      author_id: user?.id || '',
+      message_type: selectedType,
+      content: content.trim() || null,
+      latitude: location?.latitude || null,
+      longitude: location?.longitude || null,
+      is_deleted: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      author: {
+        id: user?.id || '',
+        email: user?.email || '',
+        first_name: profile?.first_name,
+        last_name: profile?.last_name,
+      },
+      attachments: [],
+      _pending: true, // Marqueur pour indiquer que le message est en attente
+    } as ConversationMessage & { _pending?: boolean }
+
+    // Afficher immédiatement le message
+    setMessages((prev) => [...prev, tempMsg])
+    setNewMessage('')
+    setSelectedType('general')
+
+    if (isOnline) {
+      try {
+        const { data: msg, error: msgError } = await supabase
+          .from('conversation_messages')
+          .insert({
+            conversation_id: conversation.id,
+            author_id: user?.id,
+            message_type: selectedType,
+            content: content.trim() || null,
+            latitude: location?.latitude || null,
+            longitude: location?.longitude || null,
+          })
+          .select()
+          .single()
+
+        if (msgError) throw msgError
+
+        // Remplacer le message temporaire par le vrai
+        const newMsg: ConversationMessage = {
+          ...msg,
+          author: {
+            id: user?.id || '',
+            email: user?.email || '',
+            first_name: profile?.first_name,
+            last_name: profile?.last_name,
+          },
+          attachments: [],
+        }
+        setMessages((prev) => prev.map(m => m.id === tempId ? newMsg : m))
+
+        if (mentionedUserIds.length > 0) {
+          await supabase.from('conversation_mentions').insert(
+            mentionedUserIds.map(userId => ({
+              message_id: msg.id,
+              mentioned_user_id: userId,
+              notified: false,
+            }))
+          )
+        }
+
+        if (attachments && attachments.length > 0) {
+          for (const att of attachments) {
+            await uploadAttachment(msg.id, att)
+          }
+        }
+
+        if (conversation && user) {
+          const senderName = profile?.first_name || user.email?.split('@')[0] || 'Quelqu\'un'
+          const messagePreview = content.trim() || (attachments?.[0]?.type === 'photo' ? '📷 Photo' : '📄 Document')
+          notifyConversationMessage(
+            conversation.id,
+            conversation.client_name,
+            senderName,
+            messagePreview,
+            user.id,
+            mentionedUserIds
+          ).catch(console.error)
+        }
+      } catch (error) {
+        console.error('Erreur envoi:', error)
+        // Marquer le message comme échoué
+        setMessages((prev) => prev.map(m =>
+          m.id === tempId ? { ...m, _failed: true } as any : m
+        ))
+        Alert.alert('Erreur', "Impossible d'envoyer le message. Réessayez plus tard.")
+      }
+    } else {
+      // Mode hors ligne - Ajouter à la queue
+      addMutation({
+        type: 'insert',
+        table: 'conversation_messages',
+        data: {
           conversation_id: conversation.id,
           author_id: user?.id,
           message_type: selectedType,
           content: content.trim() || null,
           latitude: location?.latitude || null,
           longitude: location?.longitude || null,
-        })
-        .select()
-        .single()
-
-      if (msgError) throw msgError
-
-      const newMsg: ConversationMessage = {
-        ...msg,
-        author: {
-          id: user?.id || '',
-          email: user?.email || '',
-          first_name: profile?.first_name,
-          last_name: profile?.last_name,
+          _tempId: tempId, // Pour retrouver le message après sync
         },
-        attachments: [],
-      }
-      setMessages((prev) => [...prev, newMsg])
-
-      if (mentionedUserIds.length > 0) {
-        await supabase.from('conversation_mentions').insert(
-          mentionedUserIds.map(userId => ({
-            message_id: msg.id,
-            mentioned_user_id: userId,
-            notified: false,
-          }))
-        )
-      }
-
-      if (attachments && attachments.length > 0) {
-        for (const att of attachments) {
-          await uploadAttachment(msg.id, att)
-        }
-      }
-
-      if (conversation && user) {
-        const senderName = profile?.first_name || user.email?.split('@')[0] || 'Quelqu\'un'
-        const messagePreview = content.trim() || (attachments?.[0]?.type === 'photo' ? '📷 Photo' : '📄 Document')
-        notifyConversationMessage(
-          conversation.id,
-          conversation.client_name,
-          senderName,
-          messagePreview,
-          user.id,
-          mentionedUserIds
-        ).catch(console.error)
-      }
-
-      setNewMessage('')
-      setSelectedType('general')
-    } catch (error) {
-      console.error('Erreur envoi:', error)
-      Alert.alert('Erreur', "Impossible d'envoyer le message")
-    } finally {
-      setSending(false)
+        maxRetries: 5,
+      })
+      Alert.alert(
+        'Mode hors ligne',
+        'Votre message sera envoyé quand vous serez connecté.'
+      )
     }
+
+    setSending(false)
   }
 
   const uploadAttachment = async (messageId: string, attachment: any) => {
@@ -433,9 +489,11 @@ export default function ConversationChatTab({
     return msg.author?.email?.substring(0, 2).toUpperCase() || '??'
   }
 
-  const renderMessage = ({ item: msg }: { item: ConversationMessage }) => {
+  const renderMessage = ({ item: msg }: { item: ConversationMessage & { _pending?: boolean; _failed?: boolean } }) => {
     const isOwn = msg.author_id === currentUserId
     const typeInfo = messageTypeLabels[msg.message_type]
+    const isPending = (msg as any)._pending
+    const isFailed = (msg as any)._failed
 
     return (
       <View style={[styles.messageContainer, isOwn && styles.messageContainerOwn]}>
@@ -445,7 +503,12 @@ export default function ConversationChatTab({
           </View>
         )}
 
-        <View style={[styles.messageBubble, isOwn ? styles.messageBubbleOwn : styles.messageBubbleOther]}>
+        <View style={[
+          styles.messageBubble,
+          isOwn ? styles.messageBubbleOwn : styles.messageBubbleOther,
+          isPending && styles.messageBubblePending,
+          isFailed && styles.messageBubbleFailed,
+        ]}>
           {!isOwn && <Text style={styles.authorName}>{getAuthorName(msg)}</Text>}
 
           {msg.message_type !== 'general' && (
@@ -487,7 +550,11 @@ export default function ConversationChatTab({
 
           <View style={styles.messageFooter}>
             {msg.latitude && <Text style={styles.locationIndicator}>📍</Text>}
-            <Text style={[styles.messageTime, isOwn && styles.messageTimeOwn]}>{formatTime(msg.created_at)}</Text>
+            {isPending && <Text style={styles.pendingIndicator}>⏳</Text>}
+            {isFailed && <Text style={styles.failedIndicator}>❌</Text>}
+            <Text style={[styles.messageTime, isOwn && styles.messageTimeOwn]}>
+              {isPending ? 'Envoi...' : isFailed ? 'Échec' : formatTime(msg.created_at)}
+            </Text>
           </View>
         </View>
       </View>
@@ -666,6 +733,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderBottomLeftRadius: 4,
   },
+  messageBubblePending: {
+    opacity: 0.7,
+  },
+  messageBubbleFailed: {
+    backgroundColor: '#FEE2E2',
+    borderColor: '#FCA5A5',
+    borderWidth: 1,
+  },
   authorName: {
     fontSize: 12,
     fontWeight: '600',
@@ -750,6 +825,14 @@ const styles = StyleSheet.create({
     color: '#7CB342',
   },
   locationIndicator: {
+    fontSize: 10,
+    marginRight: 4,
+  },
+  pendingIndicator: {
+    fontSize: 10,
+    marginRight: 4,
+  },
+  failedIndicator: {
     fontSize: 10,
     marginRight: 4,
   },

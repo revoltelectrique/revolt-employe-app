@@ -18,6 +18,8 @@ import { useAuth } from '../contexts/AuthContext'
 import { ImagePicker } from '../components'
 import * as FileSystem from 'expo-file-system'
 import { decode } from 'base64-arraybuffer'
+import { useOffline } from '../contexts/OfflineContext'
+import { useOfflineQueue } from '../lib/offlineQueue'
 
 interface ItemLine {
   id: string
@@ -37,6 +39,8 @@ export default function NouveauBCScreen() {
   const navigation = useNavigation()
   const route = useRoute<any>()
   const { user } = useAuth()
+  const { isOnline } = useOffline()
+  const { addMutation } = useOfflineQueue()
   const [loading, setLoading] = useState(false)
 
   // Récupérer les données depuis la réquisition si disponibles
@@ -96,27 +100,92 @@ export default function NouveauBCScreen() {
 
     setLoading(true)
 
-    try {
-      // Générer le numéro de BC
-      const { data: lastPO } = await supabase
-        .from('purchase_orders')
-        .select('po_number')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single()
+    if (isOnline) {
+      try {
+        // Générer le numéro de BC
+        const { data: lastPO } = await supabase
+          .from('purchase_orders')
+          .select('po_number')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single()
 
-      let nextNumber = 1
-      if (lastPO?.po_number) {
-        const match = lastPO.po_number.match(/BC-(\d+)/)
-        if (match) nextNumber = parseInt(match[1]) + 1
+        let nextNumber = 1
+        if (lastPO?.po_number) {
+          const match = lastPO.po_number.match(/BC-(\d+)/)
+          if (match) nextNumber = parseInt(match[1]) + 1
+        }
+        const poNumber = `BC-${String(nextNumber).padStart(4, '0')}`
+
+        // Créer le BC
+        const { data: po, error: poError } = await supabase
+          .from('purchase_orders')
+          .insert({
+            po_number: poNumber,
+            requester_id: user?.id,
+            supplier_name: supplierName.trim(),
+            is_billable: isBillable,
+            servicentre_call_number: isBillable ? servicentreNumber.trim() : null,
+            client_name: isBillable ? clientName.trim() : null,
+            status: 'en_attente',
+            material_request_id: fromRequisition?.id || null,
+          })
+          .select()
+          .single()
+
+        if (poError) throw poError
+
+        // Si créé depuis une réquisition, marquer la réquisition comme traitée
+        if (fromRequisition?.id) {
+          await supabase
+            .from('material_requests')
+            .update({ status: 'traite', updated_at: new Date().toISOString() })
+            .eq('id', fromRequisition.id)
+        }
+
+        // Ajouter les items
+        const itemsToInsert = validItems.map((item) => ({
+          purchase_order_id: po.id,
+          description: item.description.trim(),
+          quantity: parseInt(item.quantity) || 1,
+          price: item.price ? parseFloat(item.price) : null,
+        }))
+
+        await supabase.from('purchase_order_items').insert(itemsToInsert)
+
+        // Upload des images si présentes
+        if (images.length > 0) {
+          for (let i = 0; i < images.length; i++) {
+            const uri = images[i]
+            const base64 = await FileSystem.readAsStringAsync(uri, {
+              encoding: FileSystem.EncodingType.Base64,
+            })
+            const fileName = `${po.id}/${Date.now()}_${i}.jpg`
+
+            await supabase.storage
+              .from('purchase-order-attachments')
+              .upload(fileName, decode(base64), {
+                contentType: 'image/jpeg',
+              })
+          }
+        }
+
+        Alert.alert('Succès', `Bon de commande ${poNumber} créé!`, [
+          { text: 'OK', onPress: () => navigation.goBack() },
+        ])
+      } catch (error) {
+        console.error('Erreur:', error)
+        Alert.alert('Erreur', 'Impossible de créer le bon de commande')
       }
-      const poNumber = `BC-${String(nextNumber).padStart(4, '0')}`
+    } else {
+      // Mode hors ligne - Ajouter à la queue
+      const tempPONumber = `BC-OFFLINE-${Date.now()}`
 
-      // Créer le BC
-      const { data: po, error: poError } = await supabase
-        .from('purchase_orders')
-        .insert({
-          po_number: poNumber,
+      addMutation({
+        type: 'insert',
+        table: 'purchase_orders',
+        data: {
+          po_number: tempPONumber, // Sera remplacé côté serveur
           requester_id: user?.id,
           supplier_name: supplierName.trim(),
           is_billable: isBillable,
@@ -124,56 +193,31 @@ export default function NouveauBCScreen() {
           client_name: isBillable ? clientName.trim() : null,
           status: 'en_attente',
           material_request_id: fromRequisition?.id || null,
-        })
-        .select()
-        .single()
+          _items: validItems.map((item) => ({
+            description: item.description.trim(),
+            quantity: parseInt(item.quantity) || 1,
+            price: item.price ? parseFloat(item.price) : null,
+          })),
+        },
+        maxRetries: 5,
+      })
 
-      if (poError) throw poError
-
-      // Si créé depuis une réquisition, marquer la réquisition comme traitée
-      if (fromRequisition?.id) {
-        await supabase
-          .from('material_requests')
-          .update({ status: 'traite', updated_at: new Date().toISOString() })
-          .eq('id', fromRequisition.id)
-      }
-
-      // Ajouter les items
-      const itemsToInsert = validItems.map((item) => ({
-        purchase_order_id: po.id,
-        description: item.description.trim(),
-        quantity: parseInt(item.quantity) || 1,
-        price: item.price ? parseFloat(item.price) : null,
-      }))
-
-      await supabase.from('purchase_order_items').insert(itemsToInsert)
-
-      // Upload des images si présentes
       if (images.length > 0) {
-        for (let i = 0; i < images.length; i++) {
-          const uri = images[i]
-          const base64 = await FileSystem.readAsStringAsync(uri, {
-            encoding: FileSystem.EncodingType.Base64,
-          })
-          const fileName = `${po.id}/${Date.now()}_${i}.jpg`
-
-          await supabase.storage
-            .from('purchase-order-attachments')
-            .upload(fileName, decode(base64), {
-              contentType: 'image/jpeg',
-            })
-        }
+        Alert.alert(
+          'Mode hors ligne',
+          'Le bon de commande sera créé quand vous serez connecté. Les images ne seront pas envoyées (non supporté hors ligne).',
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        )
+      } else {
+        Alert.alert(
+          'Mode hors ligne',
+          'Le bon de commande sera créé quand vous serez connecté.',
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        )
       }
-
-      Alert.alert('Succès', `Bon de commande ${poNumber} créé!`, [
-        { text: 'OK', onPress: () => navigation.goBack() },
-      ])
-    } catch (error) {
-      console.error('Erreur:', error)
-      Alert.alert('Erreur', 'Impossible de créer le bon de commande')
-    } finally {
-      setLoading(false)
     }
+
+    setLoading(false)
   }
 
   return (
@@ -181,6 +225,15 @@ export default function NouveauBCScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
+      {/* Indicateur mode hors ligne */}
+      {!isOnline && (
+        <View style={styles.offlineBanner}>
+          <Text style={styles.offlineBannerText}>
+            📡 Mode hors ligne - Le BC sera créé lors de la reconnexion
+          </Text>
+        </View>
+      )}
+
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
         {/* Fournisseur */}
         <View style={styles.section}>
@@ -310,6 +363,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  offlineBanner: {
+    backgroundColor: '#FEE2E2',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  offlineBannerText: {
+    fontSize: 12,
+    color: '#DC2626',
   },
   scroll: {
     flex: 1,

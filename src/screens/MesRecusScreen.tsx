@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useMemo } from 'react'
 import {
   View,
   Text,
@@ -8,11 +8,14 @@ import {
   RefreshControl,
   Image
 } from 'react-native'
-import { useNavigation, useFocusEffect } from '@react-navigation/native'
+import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { Receipt, ReceiptStatus } from '../types'
 import { Card, Badge, Button, EmptyState } from '../components'
+import { useOfflineData } from '../hooks/useOfflineData'
+import { CacheKeys, CacheTTL } from '../lib/storage'
+import { useOffline } from '../contexts/OfflineContext'
 
 const statusLabels: Record<ReceiptStatus, string> = {
   en_attente: 'En attente',
@@ -29,47 +32,52 @@ const statusColors: Record<ReceiptStatus, { bg: string; text: string }> = {
 export default function MesRecusScreen() {
   const navigation = useNavigation<any>()
   const { user } = useAuth()
-  const [receipts, setReceipts] = useState<Receipt[]>([])
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
+  const { isOnline } = useOffline()
   const [filter, setFilter] = useState<ReceiptStatus | 'all'>('all')
 
-  const loadReceipts = async () => {
-    try {
-      let query = supabase
-        .from('receipts')
-        .select(`
-          *,
-          category:receipt_categories(id, name)
-        `)
-        .eq('submitted_by', user?.id)
-        .order('submission_date', { ascending: false })
+  // Fetch avec cache offline
+  const loadReceipts = useCallback(async (): Promise<Receipt[]> => {
+    if (!user?.id) return []
 
-      if (filter !== 'all') {
-        query = query.eq('status', filter)
-      }
+    let query = supabase
+      .from('receipts')
+      .select(`
+        *,
+        category:receipt_categories(id, name)
+      `)
+      .eq('submitted_by', user?.id)
+      .order('submission_date', { ascending: false })
 
-      const { data, error } = await query
-
-      if (error) throw error
-      setReceipts(data || [])
-    } catch (error) {
-      console.error('Erreur chargement reçus:', error)
-    } finally {
-      setLoading(false)
-      setRefreshing(false)
+    if (filter !== 'all') {
+      query = query.eq('status', filter)
     }
-  }
 
-  useFocusEffect(
-    useCallback(() => {
-      loadReceipts()
-    }, [filter])
+    const { data, error } = await query
+    if (error) throw error
+    return data || []
+  }, [user?.id, filter])
+
+  // Cache key inclut le filtre
+  const cacheKey = useMemo(
+    () => `${CacheKeys.receiptsList(user?.id || 'guest')}:${filter}`,
+    [user?.id, filter]
   )
 
-  const onRefresh = () => {
-    setRefreshing(true)
-    loadReceipts()
+  const {
+    data: receipts,
+    loading,
+    isStale,
+    isFromCache,
+    refetch,
+  } = useOfflineData<Receipt[]>(loadReceipts, {
+    cacheKey,
+    ttl: CacheTTL.MEDIUM,
+    strategy: 'stale-while-revalidate',
+    dependencies: [user?.id, filter],
+  })
+
+  const onRefresh = async () => {
+    await refetch()
   }
 
   const formatDate = (dateString: string | null) => {
@@ -162,18 +170,28 @@ export default function MesRecusScreen() {
   )
 
   // Statistiques
+  const receiptsList = receipts || []
   const stats = {
-    total: receipts.length,
-    pending: receipts.filter(r => r.status === 'en_attente').length,
-    approved: receipts.filter(r => r.status === 'approuve').length,
-    rejected: receipts.filter(r => r.status === 'refuse').length,
-    totalAmount: receipts
+    total: receiptsList.length,
+    pending: receiptsList.filter(r => r.status === 'en_attente').length,
+    approved: receiptsList.filter(r => r.status === 'approuve').length,
+    rejected: receiptsList.filter(r => r.status === 'refuse').length,
+    totalAmount: receiptsList
       .filter(r => r.status === 'approuve')
       .reduce((sum, r) => sum + (r.total_amount || 0), 0)
   }
 
   return (
     <View style={styles.container}>
+      {/* Indicateur offline/cache */}
+      {(!isOnline || isFromCache) && (
+        <View style={[styles.cacheIndicator, !isOnline && styles.offlineIndicator]}>
+          <Text style={styles.cacheIndicatorText}>
+            {!isOnline ? '📡 Mode hors ligne' : isStale ? '⏳ Données en cache' : '✓ Cache récent'}
+          </Text>
+        </View>
+      )}
+
       {/* Statistiques */}
       <View style={styles.statsContainer}>
         <View style={styles.statCard}>
@@ -217,12 +235,12 @@ export default function MesRecusScreen() {
 
       {/* Liste des reçus */}
       <FlatList
-        data={receipts}
+        data={receiptsList}
         renderItem={renderReceipt}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          <RefreshControl refreshing={false} onRefresh={onRefresh} />
         }
         ListEmptyComponent={
           !loading ? (
@@ -256,6 +274,19 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5'
+  },
+  cacheIndicator: {
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  offlineIndicator: {
+    backgroundColor: '#FEE2E2',
+  },
+  cacheIndicatorText: {
+    fontSize: 12,
+    color: '#92400E',
   },
   statsContainer: {
     flexDirection: 'row',
