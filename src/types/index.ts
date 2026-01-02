@@ -21,8 +21,61 @@ export interface User {
   can_access_conversations: boolean
   can_access_receipts: boolean
   can_access_erp_beta: boolean
+  can_access_forms: boolean
   created_at: string
   expo_push_token?: string | null
+}
+
+// Inspection types
+export type InspectionStatus = 'draft' | 'completed' | 'reviewed'
+export type InspectionResponseStatus = 'ok' | 'anomaly' | 'na'
+
+export interface InspectionType {
+  id: string
+  code: string
+  name: string
+  description: string | null
+  icon: string | null
+  is_active: boolean
+  created_at: string
+}
+
+export interface InspectionForm {
+  id: string
+  inspection_type_id: string
+  user_id: string
+  inspection_date: string
+  equipment_owner: string | null
+  equipment_serial: string | null
+  equipment_model: string | null
+  equipment_category: string | null
+  nominal_load: string | null
+  hour_meter: string | null
+  last_structural_inspection: string | null
+  last_annual_inspection: string | null
+  last_periodic_inspection: string | null
+  operator_signature: string | null
+  operator_initials: string | null
+  supervisor_signature: string | null
+  supervisor_initials: string | null
+  status: InspectionStatus
+  notes: string | null
+  location: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+  inspection_type?: InspectionType
+  user?: { id: string; first_name?: string; last_name?: string }
+}
+
+export interface InspectionResponse {
+  id: string
+  form_id: string
+  item_id: string | null
+  status: InspectionResponseStatus | null
+  value: string | null
+  comment: string | null
+  created_at: string
 }
 
 export interface PurchaseOrder {

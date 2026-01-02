@@ -200,6 +200,15 @@ export default function RequisitionsScreen() {
           />
         }
       />
+
+      {/* Bouton flottant pour ajouter */}
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => navigation.navigate('NouvelleRequisition')}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.fabIcon}>+</Text>
+      </TouchableOpacity>
     </View>
   )
 }
@@ -313,5 +322,27 @@ const styles = StyleSheet.create({
     color: '#2563EB',
     fontWeight: '600',
     fontSize: 14,
+  },
+  fab: {
+    position: 'absolute',
+    right: 20,
+    bottom: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#2563EB',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 8,
+  },
+  fabIcon: {
+    fontSize: 32,
+    color: '#fff',
+    fontWeight: '300',
+    marginTop: -2,
   },
 })

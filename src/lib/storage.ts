@@ -1,14 +1,12 @@
 /**
- * Storage module using MMKV for fast, persistent local storage
- * Used for offline cache and sync queue
+ * Storage module using AsyncStorage for persistent local storage
+ * Compatible with Expo Go (unlike MMKV which requires native modules)
  */
 
-import { MMKV } from 'react-native-mmkv'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 
-// Create MMKV instance
-export const storage = new MMKV({
-  id: 'revolt-offline-storage',
-})
+// In-memory cache for faster synchronous access
+const memoryCache: Map<string, string> = new Map()
 
 // Cache entry with metadata
 interface CacheEntry<T> {
@@ -18,11 +16,31 @@ interface CacheEntry<T> {
 }
 
 /**
- * Get item from storage with automatic JSON parsing
+ * Initialize storage - load all keys into memory cache
+ */
+export async function initStorage(): Promise<void> {
+  try {
+    const keys = await AsyncStorage.getAllKeys()
+    const filteredKeys = keys.filter(k => k.startsWith('revolt:'))
+    if (filteredKeys.length > 0) {
+      const pairs = await AsyncStorage.multiGet(filteredKeys)
+      pairs.forEach(([key, value]) => {
+        if (value) memoryCache.set(key, value)
+      })
+    }
+    console.log(`[Storage] Initialized with ${memoryCache.size} cached items`)
+  } catch (error) {
+    console.error('[Storage] Error initializing:', error)
+  }
+}
+
+/**
+ * Get item from storage with automatic JSON parsing (sync from memory)
  */
 export function getItem<T>(key: string): T | null {
   try {
-    const value = storage.getString(key)
+    const prefixedKey = `revolt:${key}`
+    const value = memoryCache.get(prefixedKey)
     if (!value) return null
     return JSON.parse(value) as T
   } catch (error) {
@@ -32,13 +50,48 @@ export function getItem<T>(key: string): T | null {
 }
 
 /**
+ * Get item async (directly from AsyncStorage)
+ */
+export async function getItemAsync<T>(key: string): Promise<T | null> {
+  try {
+    const prefixedKey = `revolt:${key}`
+    const value = await AsyncStorage.getItem(prefixedKey)
+    if (!value) return null
+    return JSON.parse(value) as T
+  } catch (error) {
+    console.error(`[Storage] Error getting item async ${key}:`, error)
+    return null
+  }
+}
+
+/**
  * Set item in storage with automatic JSON serialization
  */
 export function setItem<T>(key: string, value: T): void {
   try {
-    storage.set(key, JSON.stringify(value))
+    const prefixedKey = `revolt:${key}`
+    const stringValue = JSON.stringify(value)
+    memoryCache.set(prefixedKey, stringValue)
+    // Persist async (fire and forget)
+    AsyncStorage.setItem(prefixedKey, stringValue).catch(err => {
+      console.error(`[Storage] Error persisting item ${key}:`, err)
+    })
   } catch (error) {
     console.error(`[Storage] Error setting item ${key}:`, error)
+  }
+}
+
+/**
+ * Set item async (wait for persistence)
+ */
+export async function setItemAsync<T>(key: string, value: T): Promise<void> {
+  try {
+    const prefixedKey = `revolt:${key}`
+    const stringValue = JSON.stringify(value)
+    memoryCache.set(prefixedKey, stringValue)
+    await AsyncStorage.setItem(prefixedKey, stringValue)
+  } catch (error) {
+    console.error(`[Storage] Error setting item async ${key}:`, error)
   }
 }
 
@@ -47,18 +100,27 @@ export function setItem<T>(key: string, value: T): void {
  */
 export function removeItem(key: string): void {
   try {
-    storage.delete(key)
+    const prefixedKey = `revolt:${key}`
+    memoryCache.delete(prefixedKey)
+    AsyncStorage.removeItem(prefixedKey).catch(err => {
+      console.error(`[Storage] Error removing item ${key}:`, err)
+    })
   } catch (error) {
     console.error(`[Storage] Error removing item ${key}:`, error)
   }
 }
 
 /**
- * Clear all items from storage
+ * Clear all revolt items from storage
  */
-export function clearAll(): void {
+export async function clearAll(): Promise<void> {
   try {
-    storage.clearAll()
+    const keys = await AsyncStorage.getAllKeys()
+    const revoltKeys = keys.filter(k => k.startsWith('revolt:'))
+    if (revoltKeys.length > 0) {
+      await AsyncStorage.multiRemove(revoltKeys)
+    }
+    memoryCache.clear()
   } catch (error) {
     console.error('[Storage] Error clearing storage:', error)
   }
@@ -69,8 +131,14 @@ export function clearAll(): void {
  */
 export function getKeysByPrefix(prefix: string): string[] {
   try {
-    const allKeys = storage.getAllKeys()
-    return allKeys.filter(key => key.startsWith(prefix))
+    const fullPrefix = `revolt:${prefix}`
+    const keys: string[] = []
+    memoryCache.forEach((_, key) => {
+      if (key.startsWith(fullPrefix)) {
+        keys.push(key.replace('revolt:', ''))
+      }
+    })
+    return keys
   } catch (error) {
     console.error(`[Storage] Error getting keys by prefix ${prefix}:`, error)
     return []
@@ -134,7 +202,8 @@ export function getStaleOrFreshData<T>(key: string): { data: T; isStale: boolean
  * Check if cache entry exists (even if stale)
  */
 export function hasCachedData(key: string): boolean {
-  return storage.contains(key)
+  const prefixedKey = `revolt:${key}`
+  return memoryCache.has(prefixedKey)
 }
 
 /**
@@ -180,11 +249,28 @@ export const CacheKeys = {
   purchaseOrderDetail: (poId: string) => `purchase_order:detail:${poId}`,
 
   // News
+  news: () => `news:company`,
   companyNews: () => `news:company`,
 
   // Inventory
   supplierOrders: () => `inventory:supplier_orders`,
   inventoryItems: () => `inventory:items`,
+}
+
+// Dummy storage object for compatibility
+export const storage = {
+  getString: (key: string) => memoryCache.get(`revolt:${key}`),
+  set: (key: string, value: string) => {
+    memoryCache.set(`revolt:${key}`, value)
+    AsyncStorage.setItem(`revolt:${key}`, value)
+  },
+  delete: (key: string) => {
+    memoryCache.delete(`revolt:${key}`)
+    AsyncStorage.removeItem(`revolt:${key}`)
+  },
+  contains: (key: string) => memoryCache.has(`revolt:${key}`),
+  getAllKeys: () => Array.from(memoryCache.keys()).map(k => k.replace('revolt:', '')),
+  clearAll: () => clearAll(),
 }
 
 export default storage
