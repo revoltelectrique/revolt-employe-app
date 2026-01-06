@@ -14,9 +14,10 @@ import { SupplierOrder, SupplierOrderItem, SupplierOrderStatus } from '../types'
 
 const statusLabels: Record<SupplierOrderStatus, { label: string; bg: string; text: string }> = {
   en_attente: { label: 'En attente', bg: '#FEF3C7', text: '#D97706' },
+  expediee: { label: 'Expédiée', bg: '#DBEAFE', text: '#2563EB' },
   partiel: { label: 'Partiel', bg: '#FED7AA', text: '#EA580C' },
-  recu: { label: 'Recu', bg: '#D1FAE5', text: '#059669' },
-  annule: { label: 'Annule', bg: '#F3F4F6', text: '#6B7280' },
+  recu: { label: 'Reçu', bg: '#D1FAE5', text: '#059669' },
+  annule: { label: 'Annulé', bg: '#F3F4F6', text: '#6B7280' },
 }
 
 type SupplierOrderFull = SupplierOrder & {

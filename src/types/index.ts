@@ -378,7 +378,7 @@ export type InventoryMovementType =
 
 export type KitStatus = 'brouillon' | 'pret' | 'en_transit' | 'sur_chantier' | 'utilise' | 'partiel'
 
-export type SupplierOrderStatus = 'en_attente' | 'partiel' | 'recu' | 'annule'
+export type SupplierOrderStatus = 'en_attente' | 'expediee' | 'partiel' | 'recu' | 'annule'
 
 export interface Supplier {
   id: string
