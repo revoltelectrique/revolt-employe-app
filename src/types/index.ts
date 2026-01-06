@@ -408,6 +408,12 @@ export interface SupplierOrder {
   expected_delivery_date: string | null
   delivery_location: string
   created_at: string
+  // Champs de verification
+  last_verified_at: string | null
+  last_verified_by: string | null
+  verification_snoozed_until: string | null
+  supplier_contacted_at: string | null
+  supplier_contact_notes: string | null
   supplier?: Supplier
   items?: SupplierOrderItem[]
 }
