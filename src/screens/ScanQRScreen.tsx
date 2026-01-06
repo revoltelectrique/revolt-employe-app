@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import {
   View,
   Text,
@@ -8,10 +8,12 @@ import {
   ActivityIndicator,
   Modal,
   ScrollView,
+  TextInput,
 } from 'react-native'
-import { CameraView, useCameraPermissions } from 'expo-camera'
+import { CameraView, useCameraPermissions, BarcodeScanningResult } from 'expo-camera'
 import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../contexts/AuthContext'
 import { ScannedQRContent, InventoryItem, Kit } from '../types'
 
 type ScannedItemType = 'inventory' | 'kit' | 'unknown'
@@ -25,11 +27,18 @@ interface ScannedResult {
 
 export default function ScanQRScreen() {
   const navigation = useNavigation<any>()
+  const { user } = useAuth()
   const [permission, requestPermission] = useCameraPermissions()
   const [scanned, setScanned] = useState(false)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<ScannedResult | null>(null)
   const [showResult, setShowResult] = useState(false)
+
+  // Checkout modal state
+  const [showCheckoutModal, setShowCheckoutModal] = useState(false)
+  const [checkoutDestination, setCheckoutDestination] = useState('')
+  const [checkoutNotes, setCheckoutNotes] = useState('')
+  const [checkoutLoading, setCheckoutLoading] = useState(false)
 
   const parseQRCode = (data: string): ScannedQRContent | null => {
     try {
@@ -86,8 +95,14 @@ export default function ScanQRScreen() {
     }
   }
 
-  const handleBarCodeScanned = async ({ data }: { data: string }) => {
-    if (scanned || loading) return
+  const handleBarCodeScanned = async (result: BarcodeScanningResult) => {
+    console.log('=== BARCODE DETECTED ===', result)
+    const data = result.data
+
+    if (scanned || loading) {
+      console.log('Already scanned or loading, ignoring')
+      return
+    }
 
     setScanned(true)
     setLoading(true)
@@ -147,6 +162,8 @@ export default function ScanQRScreen() {
     setScanned(false)
     setResult(null)
     setShowResult(false)
+    setCheckoutDestination('')
+    setCheckoutNotes('')
   }
 
   const formatCurrency = (amount: number | null) => {
@@ -172,15 +189,83 @@ export default function ScanQRScreen() {
     return labels[status] || { label: status, color: '#6B7280' }
   }
 
+  // Check if item can be checked out
+  const canCheckout = (item: InventoryItem) => {
+    return item.status === 'en_stock' && user
+  }
+
+  // Handle checkout action
+  const handleCheckout = async () => {
+    if (!result?.data || result.type !== 'inventory' || !user) return
+
+    const item = result.data as InventoryItem
+
+    setCheckoutLoading(true)
+    try {
+      // Update item status and checkout fields
+      const { error: updateError } = await supabase
+        .from('inventory_items')
+        .update({
+          status: 'sur_chantier',
+          checked_out_at: new Date().toISOString(),
+          checked_out_by: user.id,
+          checkout_destination: checkoutDestination || null,
+          checkout_notes: checkoutNotes || null,
+        })
+        .eq('id', item.id)
+
+      if (updateError) throw updateError
+
+      // Create movement record
+      const { error: movementError } = await supabase
+        .from('inventory_movements')
+        .insert({
+          inventory_item_id: item.id,
+          movement_type: 'sortie',
+          from_location: item.location,
+          to_location: checkoutDestination || 'Chantier',
+          quantity: item.quantity,
+          performed_by: user.id,
+          notes: checkoutNotes || `Sortie via scan QR par ${user.first_name || user.email}`,
+        })
+
+      if (movementError) throw movementError
+
+      Alert.alert(
+        'Sortie confirmee',
+        `L'item ${item.qr_code} a ete mis en sortie avec succes.`,
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              setShowCheckoutModal(false)
+              resetScanner()
+            },
+          },
+        ]
+      )
+    } catch (error) {
+      console.error('Erreur checkout:', error)
+      Alert.alert('Erreur', 'Une erreur est survenue lors de la sortie.')
+    } finally {
+      setCheckoutLoading(false)
+    }
+  }
+
+  console.log('=== ScanQRScreen RENDER ===', { permission, scanned, loading })
+
   if (!permission) {
+    console.log('Permission is null, requesting...')
     return (
       <View style={styles.permissionContainer}>
         <ActivityIndicator size="large" color="#D97706" />
+        <Text style={styles.permissionText}>Demande d'acces a la camera...</Text>
       </View>
     )
   }
 
   if (!permission.granted) {
+    console.log('Permission not granted')
     return (
       <View style={styles.permissionContainer}>
         <Text style={styles.permissionIcon}>📷</Text>
@@ -195,27 +280,33 @@ export default function ScanQRScreen() {
     )
   }
 
+  console.log('=== Rendering CameraView ===')
+
   return (
     <View style={styles.container}>
       <CameraView
-        style={styles.camera}
+        style={StyleSheet.absoluteFillObject}
+        facing="back"
+        active={true}
         barcodeScannerSettings={{
-          barcodeTypes: ['qr'],
+          barcodeTypes: ['qr', 'aztec', 'ean13', 'ean8', 'qr', 'pdf417', 'datamatrix', 'code39', 'code128'],
+          interval: 500,
         }}
-        onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
-      >
-        <View style={styles.overlay}>
-          <View style={styles.scanArea}>
-            <View style={[styles.corner, styles.topLeft]} />
-            <View style={[styles.corner, styles.topRight]} />
-            <View style={[styles.corner, styles.bottomLeft]} />
-            <View style={[styles.corner, styles.bottomRight]} />
-          </View>
-          <Text style={styles.instruction}>
-            {loading ? 'Verification...' : 'Positionnez le QR code dans le cadre'}
-          </Text>
+        onBarcodeScanned={handleBarCodeScanned}
+      />
+
+      {/* Overlay */}
+      <View style={styles.overlay} pointerEvents="none">
+        <View style={styles.scanArea}>
+          <View style={[styles.corner, styles.topLeft]} />
+          <View style={[styles.corner, styles.topRight]} />
+          <View style={[styles.corner, styles.bottomLeft]} />
+          <View style={[styles.corner, styles.bottomRight]} />
         </View>
-      </CameraView>
+        <Text style={styles.instruction}>
+          {loading ? 'Verification...' : 'Positionnez le QR code dans le cadre'}
+        </Text>
+      </View>
 
       {loading && (
         <View style={styles.loadingOverlay}>
@@ -306,6 +397,32 @@ export default function ScanQRScreen() {
                       {(result.data as InventoryItem).purchase_order?.po_number}
                     </Text>
                   </View>
+                )}
+
+                {/* Checkout info if already checked out */}
+                {(result.data as InventoryItem).status === 'sur_chantier' && (result.data as InventoryItem).checked_out_at && (
+                  <View style={styles.checkoutInfo}>
+                    <Text style={styles.checkoutInfoTitle}>⚡ Deja en sortie</Text>
+                    {(result.data as InventoryItem).checkout_destination && (
+                      <Text style={styles.checkoutInfoText}>
+                        Destination: {(result.data as InventoryItem).checkout_destination}
+                      </Text>
+                    )}
+                    <Text style={styles.checkoutInfoText}>
+                      Depuis: {new Date((result.data as InventoryItem).checked_out_at!).toLocaleDateString('fr-CA')}
+                    </Text>
+                  </View>
+                )}
+
+                {/* Checkout button if item is in stock */}
+                {canCheckout(result.data as InventoryItem) && (
+                  <TouchableOpacity
+                    style={styles.checkoutButton}
+                    onPress={() => setShowCheckoutModal(true)}
+                  >
+                    <Text style={styles.checkoutButtonIcon}>📤</Text>
+                    <Text style={styles.checkoutButtonText}>Sortie materiel</Text>
+                  </TouchableOpacity>
                 )}
               </ScrollView>
             ) : result?.type === 'kit' && result.data ? (
@@ -399,6 +516,89 @@ export default function ScanQRScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Checkout Modal */}
+      <Modal
+        visible={showCheckoutModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowCheckoutModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <View style={styles.resultHeader}>
+              <Text style={styles.resultIcon}>📤</Text>
+              <Text style={styles.resultTitle}>Sortie materiel</Text>
+            </View>
+
+            {result?.type === 'inventory' && result.data && (
+              <>
+                <View style={styles.checkoutItemInfo}>
+                  <Text style={styles.checkoutItemQr}>{(result.data as InventoryItem).qr_code}</Text>
+                  <Text style={styles.checkoutItemDesc} numberOfLines={2}>
+                    {(result.data as InventoryItem).description}
+                  </Text>
+                  <Text style={styles.checkoutItemQty}>
+                    {(result.data as InventoryItem).quantity} {(result.data as InventoryItem).unit}
+                  </Text>
+                </View>
+
+                <View style={styles.checkoutUserInfo}>
+                  <Text style={styles.checkoutUserLabel}>Responsable</Text>
+                  <Text style={styles.checkoutUserValue}>
+                    {user?.first_name} {user?.last_name || user?.email}
+                  </Text>
+                </View>
+
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Destination (optionnel)</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={checkoutDestination}
+                    onChangeText={setCheckoutDestination}
+                    placeholder="Ex: Chantier ABC, Client XYZ..."
+                    placeholderTextColor="#999"
+                  />
+                </View>
+
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Notes (optionnel)</Text>
+                  <TextInput
+                    style={[styles.textInput, styles.textArea]}
+                    value={checkoutNotes}
+                    onChangeText={setCheckoutNotes}
+                    placeholder="Notes supplementaires..."
+                    placeholderTextColor="#999"
+                    multiline
+                    numberOfLines={3}
+                  />
+                </View>
+              </>
+            )}
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.secondaryButton]}
+                onPress={() => setShowCheckoutModal(false)}
+                disabled={checkoutLoading}
+              >
+                <Text style={styles.secondaryButtonText}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.checkoutConfirmButton]}
+                onPress={handleCheckout}
+                disabled={checkoutLoading}
+              >
+                {checkoutLoading ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.primaryButtonText}>Confirmer sortie</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   )
 }
@@ -408,12 +608,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000',
   },
-  camera: {
-    flex: 1,
-  },
   overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.3)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -522,7 +719,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 24,
-    maxHeight: '80%',
+    maxHeight: '85%',
   },
   resultHeader: {
     flexDirection: 'row',
@@ -626,6 +823,41 @@ const styles = StyleSheet.create({
     color: '#1E3A8A',
     fontWeight: '600',
   },
+  checkoutInfo: {
+    backgroundColor: '#F3E8FF',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  checkoutInfoTitle: {
+    fontSize: 14,
+    color: '#7C3AED',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  checkoutInfoText: {
+    fontSize: 13,
+    color: '#6B21A8',
+  },
+  checkoutButton: {
+    backgroundColor: '#7C3AED',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 10,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  checkoutButtonIcon: {
+    fontSize: 18,
+    marginRight: 8,
+  },
+  checkoutButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
   kitItems: {
     borderTopWidth: 1,
     borderTopColor: '#E5E5E5',
@@ -683,6 +915,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  checkoutConfirmButton: {
+    backgroundColor: '#7C3AED',
+  },
   errorIcon: {
     fontSize: 48,
     textAlign: 'center',
@@ -706,5 +941,65 @@ const styles = StyleSheet.create({
     color: '#999',
     textAlign: 'center',
     fontFamily: 'monospace',
+  },
+  // Checkout modal styles
+  checkoutItemInfo: {
+    backgroundColor: '#F3F4F6',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  checkoutItemQr: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64191E',
+    fontFamily: 'monospace',
+    marginBottom: 8,
+  },
+  checkoutItemDesc: {
+    fontSize: 15,
+    color: '#333',
+    fontWeight: '500',
+    marginBottom: 4,
+  },
+  checkoutItemQty: {
+    fontSize: 13,
+    color: '#666',
+  },
+  checkoutUserInfo: {
+    backgroundColor: '#DCFCE7',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  checkoutUserLabel: {
+    fontSize: 12,
+    color: '#166534',
+    marginBottom: 2,
+  },
+  checkoutUserValue: {
+    fontSize: 15,
+    color: '#14532D',
+    fontWeight: '600',
+  },
+  inputGroup: {
+    marginBottom: 16,
+  },
+  inputLabel: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 8,
+  },
+  textInput: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: '#333',
+  },
+  textArea: {
+    minHeight: 80,
+    textAlignVertical: 'top',
   },
 })

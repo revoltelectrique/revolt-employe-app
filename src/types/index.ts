@@ -449,6 +449,11 @@ export interface InventoryItem {
   label_printed: boolean
   created_at: string
   updated_at: string
+  // Checkout fields
+  checked_out_at: string | null
+  checked_out_by: string | null
+  checkout_notes: string | null
+  checkout_destination: string | null
   product?: Product
   purchase_order?: { id: string; po_number: string }
 }
