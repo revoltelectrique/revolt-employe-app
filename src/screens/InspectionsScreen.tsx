@@ -87,10 +87,29 @@ export default function InspectionsScreen() {
     }
   }
 
+  const handleNewInspection = (type: InspectionType) => {
+    // Route to different screens based on inspection type
+    if (type.code === 'ELECTRICAL' || type.code === 'ELECTRIQUE') {
+      navigation.navigate('NouvelleInspectionElectrique', { typeCode: type.code, typeId: type.id })
+    } else {
+      navigation.navigate('NouvelleInspection', { typeCode: type.code, typeId: type.id })
+    }
+  }
+
+  const handleViewInspection = (inspection: InspectionForm) => {
+    // Route to different detail screens based on inspection type
+    const typeCode = inspection.inspection_type?.code
+    if (typeCode === 'ELECTRICAL' || typeCode === 'ELECTRIQUE') {
+      navigation.navigate('DetailsInspectionElectrique', { inspectionId: inspection.id })
+    } else {
+      navigation.navigate('DetailsInspection', { inspectionId: inspection.id })
+    }
+  }
+
   const renderInspectionType = ({ item }: { item: InspectionType }) => (
     <TouchableOpacity
-      style={styles.typeCard}
-      onPress={() => navigation.navigate('NouvelleInspection', { typeCode: item.code, typeId: item.id })}
+      style={[styles.typeCard, (item.code === 'ELECTRICAL' || item.code === 'ELECTRIQUE') && styles.typeCardElectrical]}
+      onPress={() => handleNewInspection(item)}
     >
       <Text style={styles.typeIcon}>{item.icon || '📋'}</Text>
       <View style={styles.typeInfo}>
@@ -106,7 +125,7 @@ export default function InspectionsScreen() {
   const renderInspection = ({ item }: { item: InspectionForm }) => (
     <TouchableOpacity
       style={styles.inspectionCard}
-      onPress={() => navigation.navigate('DetailsInspection', { inspectionId: item.id })}
+      onPress={() => handleViewInspection(item)}
     >
       <View style={styles.inspectionHeader}>
         <Text style={styles.inspectionIcon}>{item.inspection_type?.icon || '📋'}</Text>
@@ -228,6 +247,9 @@ const styles = StyleSheet.create({
     elevation: 3,
     borderLeftWidth: 4,
     borderLeftColor: '#f472b6',
+  },
+  typeCardElectrical: {
+    borderLeftColor: '#eab308',
   },
   typeIcon: {
     fontSize: 32,

@@ -56,6 +56,7 @@ import ErpInventaireScreen from './src/screens/ErpInventaireScreen'
 import InspectionsScreen from './src/screens/InspectionsScreen'
 import NouvelleInspectionScreen from './src/screens/NouvelleInspectionScreen'
 import DetailsInspectionScreen from './src/screens/DetailsInspectionScreen'
+import NouvelleInspectionElectriqueScreen from './src/screens/NouvelleInspectionElectriqueScreen'
 
 const Stack = createNativeStackNavigator()
 const Tab = createBottomTabNavigator()
@@ -373,6 +374,8 @@ function AppNavigator({ navigationRef }: { navigationRef: any }) {
         {/* Inspections */}
         <Stack.Screen name="NouvelleInspection" component={NouvelleInspectionScreen} options={{ headerShown: false }} />
         <Stack.Screen name="DetailsInspection" component={DetailsInspectionScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="NouvelleInspectionElectrique" component={NouvelleInspectionElectriqueScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="DetailsInspectionElectrique" component={NouvelleInspectionElectriqueScreen} options={{ headerShown: false }} />
       </Stack.Navigator>
     </DrawerContext.Provider>
   )
