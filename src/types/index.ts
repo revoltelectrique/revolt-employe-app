@@ -697,3 +697,65 @@ export interface CreateErpMaterialInput {
   quantity: number
   unit_price: number
 }
+
+// =============================================
+// MODULE INSTALLATIONS GÉNÉRATRICES
+// =============================================
+
+export type GeneratorInstallationStatus = 'a_planifier' | 'planifie' | 'en_cours' | 'complete' | 'documents_envoyes'
+export type GeneratorBrand = 'BE' | 'Westinghouse'
+
+export interface GeneratorInstallation {
+  id: string
+  client_number: number | null
+  request_date: string | null
+  client_name: string
+  address: string | null
+  phone: string | null
+  email: string | null
+  confirmation: string | null
+  scheduled_agreement_date: string | null
+  payment_agreement_date: string | null
+  equipment_type: string | null
+  status: GeneratorInstallationStatus
+  installation_date: string | null
+  generator_brand: GeneratorBrand | null
+  generator_serial: string | null
+  transfer_switch_serial: string | null
+  installer_name: string | null
+  notes: string | null
+  signature_image_url: string | null
+  signature_timestamp: string | null
+  signature_ip: string | null
+  signature_token: string | null
+  signature_token_expires_at: string | null
+  instructions_sent_at: string | null
+  contract_sent_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface GeneratorInstallationPhoto {
+  id: string
+  installation_id: string
+  photo_url: string
+  description: string | null
+  uploaded_by: string | null
+  uploaded_at: string
+}
+
+export const GENERATOR_STATUS_LABELS: Record<GeneratorInstallationStatus, string> = {
+  'a_planifier': 'À planifier',
+  'planifie': 'Planifié',
+  'en_cours': 'En cours',
+  'complete': 'Complété',
+  'documents_envoyes': 'Documents envoyés'
+}
+
+export const GENERATOR_STATUS_COLORS: Record<GeneratorInstallationStatus, string> = {
+  'a_planifier': '#9CA3AF',
+  'planifie': '#3B82F6',
+  'en_cours': '#F59E0B',
+  'complete': '#22C55E',
+  'documents_envoyes': '#8B5CF6'
+}

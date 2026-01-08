@@ -57,6 +57,9 @@ import InspectionsScreen from './src/screens/InspectionsScreen'
 import NouvelleInspectionScreen from './src/screens/NouvelleInspectionScreen'
 import DetailsInspectionScreen from './src/screens/DetailsInspectionScreen'
 import NouvelleInspectionElectriqueScreen from './src/screens/NouvelleInspectionElectriqueScreen'
+// Génératrices
+import GeneratricesScreen from './src/screens/GeneratricesScreen'
+import DetailsGeneratriceScreen from './src/screens/DetailsGeneratriceScreen'
 
 const Stack = createNativeStackNavigator()
 const Tab = createBottomTabNavigator()
@@ -122,6 +125,7 @@ function CustomDrawer({ visible, onClose, navigation }: { visible: boolean; onCl
     { divider: true, show: canAccessInventory || canAccessForms || canAccessErpBeta },
     { label: 'Commandes fournisseurs', icon: '🚚', screen: 'CommandesStack', show: canAccessInventory },
     { label: 'Inspections', icon: '📋', screen: 'InspectionsStack', show: canAccessForms },
+    { label: 'Génératrices', icon: '🔌', screen: 'GeneratricesStack', show: canAccessForms },
     { label: 'ERP Beta', icon: '⚡', screen: 'ErpStack', show: canAccessErpBeta, beta: true },
   ]
 
@@ -348,6 +352,7 @@ function AppNavigator({ navigationRef }: { navigationRef: any }) {
         <Stack.Screen name="RecusStack" component={MesRecusScreen} options={{ title: 'Mes reçus' }} />
         <Stack.Screen name="CommandesStack" component={CommandesFournisseursScreen} options={{ title: 'Commandes fournisseurs' }} />
         <Stack.Screen name="InspectionsStack" component={InspectionsScreen} options={{ title: 'Inspections' }} />
+        <Stack.Screen name="GeneratricesStack" component={GeneratricesScreen} options={{ headerShown: false }} />
         <Stack.Screen name="ErpStack" component={ErpHomeScreen} options={{ headerShown: false }} />
         {/* Écrans de détails */}
         <Stack.Screen name="NouveauBC" component={NouveauBCScreen} options={{ title: 'Nouveau bon de commande' }} />
@@ -376,6 +381,8 @@ function AppNavigator({ navigationRef }: { navigationRef: any }) {
         <Stack.Screen name="DetailsInspection" component={DetailsInspectionScreen} options={{ headerShown: false }} />
         <Stack.Screen name="NouvelleInspectionElectrique" component={NouvelleInspectionElectriqueScreen} options={{ headerShown: false }} />
         <Stack.Screen name="DetailsInspectionElectrique" component={NouvelleInspectionElectriqueScreen} options={{ headerShown: false }} />
+        {/* Génératrices */}
+        <Stack.Screen name="DetailsGeneratrice" component={DetailsGeneratriceScreen} options={{ headerShown: false }} />
       </Stack.Navigator>
     </DrawerContext.Provider>
   )
