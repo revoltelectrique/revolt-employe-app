@@ -25,7 +25,6 @@ export default function InspectionsScreen() {
 
   const loadData = async () => {
     try {
-      console.log("[DEBUG IDS] user:", user?.id, "profile:", profile?.id)
       // Load inspection types
       const { data: types } = await supabase
         .from('inspection_types')

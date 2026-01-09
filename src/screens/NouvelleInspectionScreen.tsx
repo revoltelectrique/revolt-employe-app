@@ -122,7 +122,7 @@ export default function NouvelleInspectionScreen() {
         .from('inspection_forms')
         .insert({
           inspection_type_id: typeId,
-          user_id: user?.id,
+          user_id: profile?.id,
           inspection_date: inspectionDate,
           equipment_owner: equipmentOwner || null,
           equipment_serial: equipmentSerial || null,
