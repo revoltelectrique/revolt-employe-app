@@ -62,23 +62,19 @@ export default function DetailsInspectionScreen() {
   const loadInspection = async () => {
     try {
       const { data: form, error } = await supabase
-        .from('inspection_forms')
-        .select(`
-          *,
-          user:users(id, first_name, last_name),
-          inspection_type:inspection_types(*)
-        `)
+        .from('electrical_inspections')
+        .select('*')
         .eq('id', inspectionId)
         .single()
 
       if (error) throw error
 
       setInspection(form)
-      setUserName(form.user ? `${form.user.first_name || ''} ${form.user.last_name || ''}`.trim() : '')
+      setUserName(form.technician_name || '')
 
       // Load responses
       const { data: respData } = await supabase
-        .from('inspection_responses')
+        .from('electrical_inspection_responses')
         .select('*')
         .eq('form_id', inspectionId)
 
