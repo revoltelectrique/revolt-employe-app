@@ -57,6 +57,7 @@ import InspectionsScreen from './src/screens/InspectionsScreen'
 import NouvelleInspectionScreen from './src/screens/NouvelleInspectionScreen'
 import DetailsInspectionScreen from './src/screens/DetailsInspectionScreen'
 import NouvelleInspectionElectriqueScreen from './src/screens/NouvelleInspectionElectriqueScreen'
+import DetailsInspectionElectriqueScreen from './src/screens/DetailsInspectionElectriqueScreen'
 // Génératrices
 import GeneratricesScreen from './src/screens/GeneratricesScreen'
 import DetailsGeneratriceScreen from './src/screens/DetailsGeneratriceScreen'
@@ -380,7 +381,7 @@ function AppNavigator({ navigationRef }: { navigationRef: any }) {
         <Stack.Screen name="NouvelleInspection" component={NouvelleInspectionScreen} options={{ headerShown: false }} />
         <Stack.Screen name="DetailsInspection" component={DetailsInspectionScreen} options={{ headerShown: false }} />
         <Stack.Screen name="NouvelleInspectionElectrique" component={NouvelleInspectionElectriqueScreen} options={{ headerShown: false }} />
-        <Stack.Screen name="DetailsInspectionElectrique" component={NouvelleInspectionElectriqueScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="DetailsInspectionElectrique" component={DetailsInspectionElectriqueScreen} options={{ headerShown: false }} />
         {/* Génératrices */}
         <Stack.Screen name="DetailsGeneratrice" component={DetailsGeneratriceScreen} options={{ headerShown: false }} />
       </Stack.Navigator>
