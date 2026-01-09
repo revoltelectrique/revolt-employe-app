@@ -33,9 +33,12 @@ const priorityLabels: Record<TaskPriority, { label: string; color: string }> = {
 
 export default function TachesScreen() {
   const navigation = useNavigation<any>()
-  const { user } = useAuth()
+  const { user, profile } = useAuth()
   const { isOnline } = useOffline()
   const [filter, setFilter] = useState<'all' | 'active' | 'mine'>('active')
+
+  // Vérifier si l'utilisateur est contremaître ou admin
+  const isContremaitre = profile?.role === 'contremaitre' || profile?.role === 'admin'
 
   // Fonction de fetch avec cache offline
   const fetchTasks = useCallback(async (): Promise<Task[]> => {
@@ -49,8 +52,14 @@ export default function TachesScreen() {
         assignee:users!assigned_to(id, email, first_name, last_name),
         subtasks:task_subtasks(id, is_completed)
       `)
-      .or(`created_by.eq.${user.id},assigned_to.eq.${user.id}`)
-      .order('created_at', { ascending: false })
+      
+    // Pour les contremaîtres/admins avec filtre "all", montrer TOUTES les tâches
+    // Sinon, filtrer par tâches de l'utilisateur
+    if (!isContremaitre || filter !== 'all') {
+      query = query.or(`created_by.eq.${user.id},assigned_to.eq.${user.id}`)
+    }
+    
+    query = query.order('created_at', { ascending: false })
 
     if (filter === 'active') {
       query = query.not('status', 'in', '("termine","annule")')
@@ -61,7 +70,7 @@ export default function TachesScreen() {
     const { data, error } = await query
     if (error) throw error
     return data || []
-  }, [user?.id, filter])
+  }, [user?.id, filter, isContremaitre])
 
   // Cache key inclut le filtre pour avoir des caches séparés
   const cacheKey = useMemo(
@@ -170,6 +179,15 @@ export default function TachesScreen() {
         </View>
       )}
 
+      {/* Indicateur contremaître */}
+      {isContremaitre && filter === 'all' && (
+        <View style={styles.contremaireIndicator}>
+          <Text style={styles.contremaireIndicatorText}>
+            👁️ Affichage de toutes les tâches de l'équipe
+          </Text>
+        </View>
+      )}
+
       {/* Filtres */}
       <View style={styles.filterContainer}>
         <TouchableOpacity
@@ -193,7 +211,7 @@ export default function TachesScreen() {
           onPress={() => setFilter('all')}
         >
           <Text style={[styles.filterText, filter === 'all' && styles.filterTextActive]}>
-            Toutes
+            {isContremaitre ? "Toute l'équipe" : 'Toutes'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -233,6 +251,19 @@ export default function TachesScreen() {
 }
 
 const styles = StyleSheet.create({
+  contremaireIndicator: {
+    backgroundColor: '#EEF2FF',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#C7D2FE',
+  },
+  contremaireIndicatorText: {
+    fontSize: 13,
+    color: '#4338CA',
+    fontWeight: '500',
+  },
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
