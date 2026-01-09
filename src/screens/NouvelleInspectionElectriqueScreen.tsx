@@ -224,7 +224,7 @@ export default function NouvelleInspectionElectriqueScreen() {
       const { data: inspection, error: inspectionError } = await supabase
         .from('electrical_inspections')
         .insert({
-          user_id: user?.id,
+          user_id: profile?.id,
           client_name: clientName,
           client_address: clientAddress || null,
           client_city: clientCity || null,
@@ -248,6 +248,11 @@ export default function NouvelleInspectionElectriqueScreen() {
         .single()
 
       if (inspectionError) throw inspectionError
+
+      console.log('[DEBUG SAVE] Inspection created successfully!')
+      console.log('[DEBUG SAVE] Inspection ID:', inspection.id)
+      console.log('[DEBUG SAVE] User ID used:', profile?.id)
+      console.log('[DEBUG SAVE] Status:', inspection.status)
 
       // Save responses
       const responsesToInsert: any[] = []
