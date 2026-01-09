@@ -25,28 +25,16 @@ export default function InspectionsScreen() {
 
   const loadData = async () => {
     try {
-      console.log("[DEBUG IDS] user:", user?.id, "profile:", profile?.id)
-      // Load inspection types
-      const { data: types } = await supabase
-        .from('inspection_types')
-        .select('*')
-        .eq('is_active', true)
-        .order('name')
-
+      console.log("[DEBUG] Loading for profile:", profile?.id)
+      const { data: types } = await supabase.from('inspection_types').select('*').eq('is_active', true).order('name')
       setInspectionTypes(types || [])
-
-      // Load recent inspections
-      const { data: forms } = await supabase
-        .from('inspection_forms')
-        .select(`
-          *,
-          inspection_type:inspection_types(*)
-        `)
-        .eq('user_id', profile?.id)
-        .order('inspection_date', { ascending: false })
-        .limit(20)
-
-      setInspections(forms || [])
+      const { data: forms } = await supabase.from('inspection_forms').select('*, inspection_type:inspection_types(*)').eq('user_id', profile?.id).order('inspection_date', { ascending: false }).limit(20)
+      const { data: electricalInspections } = await supabase.from('electrical_inspections').select('*').eq('user_id', profile?.id).order('inspection_date', { ascending: false }).limit(20)
+      const electricalType = types?.find(t => t.code === 'ELECTRICAL' || t.code === 'ELECTRIQUE')
+      const transformed = (electricalInspections || []).map(ei => ({ id: ei.id, inspection_date: ei.inspection_date, equipment_model: ei.building_type || ei.inspection_address, location: ei.inspection_city, status: ei.status, inspection_type: electricalType, inspection_type_id: electricalType?.id, user_id: ei.user_id, created_at: ei.created_at }))
+      const allInspections = [...(forms || []), ...transformed].sort((a, b) => new Date(b.inspection_date).getTime() - new Date(a.inspection_date).getTime()).slice(0, 20)
+      console.log("[DEBUG] Total:", allInspections.length)
+      setInspections(allInspections)
     } catch (error) {
       console.error('Error loading inspections:', error)
     } finally {
