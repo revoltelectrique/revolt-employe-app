@@ -14,37 +14,14 @@ import {
 } from 'react-native'
 import { useNavigation, useRoute } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
+import { ELECTRICAL_INSPECTION_SECTIONS } from '../data/electricalInspectionData'
 import { InspectionForm } from '../types'
 import * as Print from 'expo-print'
 import * as Sharing from 'expo-sharing'
 
-// Points de vérification PEMP
-const PEMP_ITEMS = [
-  { number: 1, title: 'Plaques signalétiques, étiquettes de danger' },
-  { number: 2, title: 'Échelle ou marches' },
-  { number: 3, title: 'Manuel d\'utilisation' },
-  { number: 4, title: 'Plancher de la plate-forme' },
-  { number: 5, title: 'Portillon d\'entrée, barrières' },
-  { number: 6, title: 'Garde-corps et ancrages' },
-  { number: 7, title: 'Pneus et roues' },
-  { number: 8, title: 'Mode d\'alimentation' },
-  { number: 9, title: 'Fluides (Niveau)' },
-  { number: 10, title: 'Commandes de fonctionnement' },
-  { number: 11, title: 'Système élévateur (groupe A)' },
-  { number: 12, title: 'Élévation, rotation (groupe B)' },
-  { number: 13, title: 'Stabilisateurs / vérin' },
-  { number: 14, title: 'Composants structuraux' },
-  { number: 15, title: 'Point d\'attache plate-forme' },
-  { number: 16, title: 'Canalisations hydrauliques' },
-  { number: 17, title: 'Dispositifs de sécurité' },
-]
 
-interface ResponseData {
-  item_number: number
-  fuel_type?: string
-}
 
-export default function DetailsInspectionScreen() {
+export default function DetailsInspectionElectriqueScreen() {
   const navigation = useNavigation<any>()
   const route = useRoute<any>()
   const { inspectionId } = route.params || {}
@@ -52,7 +29,8 @@ export default function DetailsInspectionScreen() {
   const [loading, setLoading] = useState(true)
   const [inspection, setInspection] = useState<InspectionForm | null>(null)
   const [userName, setUserName] = useState('')
-  const [responses, setResponses] = useState<Record<number, { status: string; comment: string; value?: string }>>({})
+  const [hasNonConformities, setHasNonConformities] = useState(false)
+  const [responses, setResponses] = useState<Record<string, any>>({})
   const [hasAnomalies, setHasAnomalies] = useState(false)
 
   useEffect(() => {
@@ -76,26 +54,35 @@ export default function DetailsInspectionScreen() {
       const { data: respData } = await supabase
         .from('electrical_inspection_responses')
         .select('*')
-        .eq('form_id', inspectionId)
+        .eq('inspection_id', inspectionId)
 
       if (respData) {
-        const respMap: Record<number, { status: string; comment: string; value?: string }> = {}
-        let hasAnomaly = false
-        respData.forEach((r: { status: string; comment: string; value: string }) => {
-          try {
-            const valueData: ResponseData = JSON.parse(r.value || '{}')
-            respMap[valueData.item_number] = {
-              status: r.status,
-              comment: r.comment,
-              value: valueData.fuel_type
+        const organizedResponses: Record<string, any> = {}
+        let hasNc = false
+        respData.forEach((r: any) => {
+          if (!organizedResponses[r.section_code]) {
+            organizedResponses[r.section_code] = {
+              isNa: r.section_na,
+              location: r.section_location,
+              volts: r.section_volts,
+              amps: r.section_amps,
+              power: r.section_power,
+              notes: r.section_notes,
+              items: {},
             }
-            if (r.status === 'anomaly') hasAnomaly = true
-          } catch {
-            // Skip
+          }
+          if (r.item_number !== null) {
+            organizedResponses[r.section_code].items[r.item_number] = {
+              selectedOptions: r.selected_options || [],
+              textValue: r.text_value,
+              isNc: r.is_nc,
+            }
+            if (r.is_nc) hasNc = true
           }
         })
-        setResponses(respMap)
-        setHasAnomalies(hasAnomaly)
+        console.log('[DEBUG] Organized sections:', Object.keys(organizedResponses))
+        setResponses(organizedResponses)
+        setHasNonConformities(hasNc)
       }
     } catch (error) {
       console.error('Error loading inspection:', error)
@@ -105,17 +92,26 @@ export default function DetailsInspectionScreen() {
     }
   }
 
-  const getStatusStyle = (status: string) => {
-    switch (status) {
-      case 'ok':
-        return { bg: '#dcfce7', text: '#166534' }
-      case 'anomaly':
-        return { bg: '#fee2e2', text: '#991b1b' }
-      case 'na':
-        return { bg: '#f3f4f6', text: '#4b5563' }
-      default:
-        return { bg: '#fef3c7', text: '#92400e' }
+  
+
+  const getOptionLabel = (value: string): string => {
+    const labels: Record<string, string> = {
+      na: 'N/A', nac: 'NAC', ok: 'OK', nc: 'NC',
+      cuivre: 'Cuivre', aluminium: 'Aluminium', endommages: 'Endommagés',
+      rouille: 'Rouille', eau: 'Eau', debouchure_ouverte: 'Débouchure ouverte',
+      craquelure: 'Craquelure', decoloration: 'Décoloration', brisure: 'Brisure',
+      oui: 'OUI', cavalier_nc: 'Cavalier NC',
+      type_d: 'Type « D »', type_p: 'Type « P »',
+      salle_bains: 'Salle de bains', placard: 'Placard',
     }
+    return labels[value] || value
+  }
+
+  const getStatusStyle = (isNc: boolean) => {
+    if (isNc) {
+      return { bg: '#fee2e2', text: '#991b1b', label: 'NC' }
+    }
+    return { bg: '#dcfce7', text: '#166534', label: 'OK' }
   }
 
   const getStatusText = (status: string) => {
@@ -136,7 +132,7 @@ export default function DetailsInspectionScreen() {
       year: 'numeric'
     })
 
-    const itemsHTML = PEMP_ITEMS.map(item => {
+    const itemsHTML = ELECTRICAL_INSPECTION_SECTIONS.map(item => {
       const response = responses[item.number]
       const statusText = response?.status === 'ok' ? 'OK' : response?.status === 'anomaly' ? 'X' : response?.status === 'na' ? 'S.O.' : '-'
       const statusColor = response?.status === 'ok' ? '#22c55e' : response?.status === 'anomaly' ? '#ef4444' : '#6b7280'
@@ -156,7 +152,7 @@ export default function DetailsInspectionScreen() {
       <html>
       <head>
         <meta charset="utf-8">
-        <title>Inspection PEMP</title>
+        <title>Inspection électrique</title>
         <style>
           @page { margin: 12mm; }
           body { font-family: Arial, sans-serif; padding: 0; margin: 0; font-size: 11px; line-height: 1.3; }
@@ -187,7 +183,7 @@ export default function DetailsInspectionScreen() {
             <img src="https://portail.revoltelectrique.com/logo-bt.png" style="height: 40px;" alt="ReVolt" />
           </div>
           <div style="text-align: center; flex: 1;">
-            <div style="font-size: 18px; font-weight: bold; color: #64191E;">INSPECTION PEMP</div>
+            <div style="font-size: 18px; font-weight: bold; color: #64191E;">INSPECTION ÉLECTRIQUE</div>
             <div style="font-size: 10px; color: #666;">Plateforme élévatrice mobile de personnel</div>
           </div>
           <div class="header-right">
@@ -252,7 +248,7 @@ export default function DetailsInspectionScreen() {
     try {
       const html = generatePDFHTML()
       const date = new Date(inspection?.inspection_date || '').toISOString().split('T')[0]
-      const fileName = `Inspection_PEMP_${date}.pdf`
+      const fileName = `Inspection_Electrique_${date}.pdf`
 
       // Générer le PDF
       const { uri } = await Print.printToFileAsync({
@@ -373,39 +369,88 @@ export default function DetailsInspectionScreen() {
         {/* Points de vérification */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Points de vérification</Text>
-          {PEMP_ITEMS.map(item => {
-            const response = responses[item.number]
-            const statusStyle = getStatusStyle(response?.status || '')
+          {ELECTRICAL_INSPECTION_SECTIONS.map((section) => {
+          const sectionData = responses[section.code]
+          if (!sectionData) return null
+
+          if (sectionData.isNa) {
             return (
-              <View
-                key={item.number}
-                style={[
-                  styles.checkItem,
-                  response?.status === 'anomaly' && styles.checkItemAnomaly
-                ]}
-              >
-                <View style={styles.checkNumber}>
-                  <Text style={styles.checkNumberText}>{item.number}</Text>
-                </View>
-                <View style={styles.checkContent}>
-                  <Text style={styles.checkTitle}>{item.title}</Text>
-                  {item.number === 8 && response?.value && (
-                    <Text style={styles.fuelType}>Type: {response.value}</Text>
-                  )}
-                  {response?.comment && (
-                    <Text style={styles.anomalyComment}>
-                      Anomalie: {response.comment}
-                    </Text>
-                  )}
-                </View>
-                <View style={[styles.statusBadge, { backgroundColor: statusStyle.bg }]}>
-                  <Text style={[styles.statusText, { color: statusStyle.text }]}>
-                    {getStatusText(response?.status || '')}
-                  </Text>
-                </View>
+              <View key={section.code} style={styles.sectionNa}>
+                <Text style={styles.sectionNaTitle}>
+                  {section.code} - {section.name}
+                </Text>
+                <Text style={styles.sectionNaText}>N/A</Text>
               </View>
             )
-          })}
+          }
+
+          return (
+            <View key={section.code} style={styles.section}>
+              <Text style={styles.sectionTitle}>
+                {section.code} - {section.name}
+              </Text>
+
+              {(sectionData.location || sectionData.volts || sectionData.amps || sectionData.power) && (
+                <View style={styles.sectionMeta}>
+                  {sectionData.location && (
+                    <Text style={styles.metaText}>📍 {sectionData.location}</Text>
+                  )}
+                  {sectionData.volts && (
+                    <Text style={styles.metaText}>⚡ {sectionData.volts}V</Text>
+                  )}
+                  {sectionData.amps && (
+                    <Text style={styles.metaText}>🔌 {sectionData.amps}A</Text>
+                  )}
+                  {sectionData.power && (
+                    <Text style={styles.metaText}>💡 {sectionData.power}kW</Text>
+                  )}
+                </View>
+              )}
+
+              {section.items.map((item) => {
+                const itemData = sectionData.items[item.item_number]
+                if (!itemData || itemData.selectedOptions.length === 0) return null
+
+                const statusStyle = getStatusStyle(itemData.isNc)
+
+                return (
+                  <View
+                    key={item.item_number}
+                    style={[
+                      styles.checkItem,
+                      itemData.isNc && styles.checkItemNc,
+                    ]}
+                  >
+                    <View style={styles.checkNumber}>
+                      <Text style={styles.checkNumberText}>{item.item_number}</Text>
+                    </View>
+                    <View style={styles.checkContent}>
+                      <Text style={styles.checkTitle}>{item.name}</Text>
+                      <Text style={styles.checkOptions}>
+                        {itemData.selectedOptions.map(opt => getOptionLabel(opt)).join(', ')}
+                      </Text>
+                      {itemData.textValue && (
+                        <Text style={styles.checkTextValue}>→ {itemData.textValue}</Text>
+                      )}
+                    </View>
+                    <View style={[styles.statusBadge, { backgroundColor: statusStyle.bg }]}>
+                      <Text style={[styles.statusText, { color: statusStyle.text }]}>
+                        {statusStyle.label}
+                      </Text>
+                    </View>
+                  </View>
+                )
+              })}
+
+              {sectionData.notes && (
+                <View style={styles.sectionNotesBox}>
+                  <Text style={styles.sectionNotesLabel}>Note:</Text>
+                  <Text style={styles.sectionNotesText}>{sectionData.notes}</Text>
+                </View>
+              )}
+            </View>
+          )
+        })}
         </View>
 
         {/* Notes */}
@@ -574,7 +619,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
   },
-  checkItemAnomaly: {
+  checkItemNc: {
     backgroundColor: '#fef2f2',
     marginHorizontal: -16,
     paddingHorizontal: 16,
@@ -666,4 +711,74 @@ const styles = StyleSheet.create({
     marginVertical: 12,
     lineHeight: 18,
   },
+  sectionNa: {
+    backgroundColor: '#f9fafb',
+    margin: 12,
+    marginTop: 0,
+    padding: 12,
+    borderRadius: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: '#d1d5db',
+  },
+  sectionNaTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666',
+  },
+  sectionNaText: {
+    fontSize: 12,
+    color: '#999',
+    marginTop: 2,
+  },
+  sectionMeta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 12,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  metaText: {
+    fontSize: 12,
+    color: '#666',
+    marginRight: 12,
+    marginBottom: 4,
+  },
+  checkItemNc: {
+    backgroundColor: '#fef2f2',
+    marginHorizontal: -16,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  checkOptions: {
+    fontSize: 13,
+    color: '#2563eb',
+    marginTop: 2,
+  },
+  checkTextValue: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+    fontStyle: 'italic',
+  },
+  sectionNotesBox: {
+    backgroundColor: '#fef9f3',
+    padding: 10,
+    borderRadius: 8,
+    marginTop: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#f59e0b',
+  },
+  sectionNotesLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#92400e',
+    marginBottom: 4,
+  },
+  sectionNotesText: {
+    fontSize: 12,
+    color: '#666',
+    lineHeight: 18,
+  },
+
 })
