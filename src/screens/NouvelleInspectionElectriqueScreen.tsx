@@ -1055,7 +1055,7 @@ const styles = StyleSheet.create({
   signatureContainer: {
     flex: 1,
     backgroundColor: '#fff',
-    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight || 30 : 0,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0,
     paddingBottom: Platform.OS === 'android' ? 24 : 20,
   },
   signatureCanvasWrapper: {
