@@ -39,6 +39,7 @@ export default function ScanQRScreen() {
   const [checkoutDestination, setCheckoutDestination] = useState('')
   const [checkoutNotes, setCheckoutNotes] = useState('')
   const [checkoutLoading, setCheckoutLoading] = useState(false)
+  const [relatedItems, setRelatedItems] = useState<InventoryItem[]>([])
 
   const parseQRCode = (data: string): ScannedQRContent | null => {
     try {
@@ -50,6 +51,21 @@ export default function ScanQRScreen() {
     } catch {
       return null
     }
+  }
+
+  // Parse code-barres Code128 (INV-xxx, KIT-xxx ou CMD-xxx)
+  const parseBarcode = (data: string): { type: 'inv' | 'kit' | 'cmd'; code: string } | null => {
+    const trimmed = data.trim()
+    if (trimmed.toUpperCase().startsWith('INV-')) {
+      return { type: 'inv', code: trimmed }
+    }
+    if (trimmed.toUpperCase().startsWith('KIT-')) {
+      return { type: 'kit', code: trimmed }
+    }
+    if (trimmed.toUpperCase().startsWith('CMD-')) {
+      return { type: 'cmd', code: trimmed }
+    }
+    return null
   }
 
   const fetchInventoryItem = async (id: string): Promise<InventoryItem | null> => {
@@ -69,6 +85,71 @@ export default function ScanQRScreen() {
     } catch (error) {
       console.error('Erreur fetch item:', error)
       return null
+    }
+  }
+
+  // Recherche par code-barres
+  const fetchInventoryItemByCode = async (qrCode: string): Promise<InventoryItem | null> => {
+    try {
+      const { data, error } = await supabase
+        .from('inventory_items')
+        .select(`
+          *,
+          product:products(sku, name),
+          purchase_order:purchase_orders(id, po_number)
+        `)
+        .eq('qr_code', qrCode)
+        .maybeSingle()
+
+      if (error) {
+        console.error('Erreur fetch item par code:', error)
+        return null
+      }
+      return data
+    } catch (error) {
+      console.error('Erreur fetch item par code:', error)
+      return null
+    }
+  }
+
+  // Recherche tous les items de la meme commande
+  const fetchRelatedItems = async (item: InventoryItem): Promise<InventoryItem[]> => {
+    try {
+      if (!item.supplier_order_item_id) return [item]
+
+      // Trouver l'order_id via supplier_order_items
+      const { data: orderItem, error: orderError } = await supabase
+        .from('supplier_order_items')
+        .select('order_id')
+        .eq('id', item.supplier_order_item_id)
+        .maybeSingle()
+
+      if (orderError || !orderItem?.order_id) return [item]
+
+      // Trouver tous les items de cette commande
+      const { data: allOrderItems } = await supabase
+        .from('supplier_order_items')
+        .select('id')
+        .eq('order_id', orderItem.order_id)
+
+      if (!allOrderItems?.length) return [item]
+
+      // Trouver tous les inventory_items lies
+      const { data: relatedItems, error } = await supabase
+        .from('inventory_items')
+        .select(`
+          *,
+          product:products(sku, name),
+          purchase_order:purchase_orders(id, po_number)
+        `)
+        .in('supplier_order_item_id', allOrderItems.map(i => i.id))
+        .order('created_at')
+
+      if (error) throw error
+      return relatedItems || [item]
+    } catch (error) {
+      console.error('Erreur fetch related items:', error)
+      return [item]
     }
   }
 
@@ -95,6 +176,30 @@ export default function ScanQRScreen() {
     }
   }
 
+  // Recherche kit par code-barres
+  const fetchKitByCode = async (qrCode: string): Promise<Kit | null> => {
+    try {
+      const { data, error } = await supabase
+        .from('kits')
+        .select(`
+          *,
+          items:kit_items(
+            id,
+            quantity,
+            inventory_item:inventory_items(id, qr_code, description, quantity, unit, status)
+          )
+        `)
+        .eq('qr_code', qrCode)
+        .single()
+
+      if (error) throw error
+      return data
+    } catch (error) {
+      console.error('Erreur fetch kit par code:', error)
+      return null
+    }
+  }
+
   const handleBarCodeScanned = async (result: BarcodeScanningResult) => {
     console.log('=== BARCODE DETECTED ===', result)
     const data = result.data
@@ -107,6 +212,59 @@ export default function ScanQRScreen() {
     setScanned(true)
     setLoading(true)
 
+    // D'abord essayer le format Code128 (INV-xxx ou KIT-xxx)
+    const barcodeContent = parseBarcode(data)
+
+    if (barcodeContent) {
+      console.log('Code-barres detecte:', barcodeContent)
+      if (barcodeContent.type === 'inv') {
+        const item = await fetchInventoryItemByCode(barcodeContent.code)
+        if (item) {
+          setResult({ type: 'inventory', data: item, raw: data })
+          // Charger tous les items de la meme commande
+          const related = await fetchRelatedItems(item)
+          setRelatedItems(related)
+        } else {
+          setResult({
+            type: 'inventory',
+            data: null,
+            raw: data,
+            error: 'Item non trouve. Verifiez que le code existe.',
+          })
+          setRelatedItems([])
+        }
+      } else if (barcodeContent.type === 'kit') {
+        const kit = await fetchKitByCode(barcodeContent.code)
+        if (kit) {
+          setResult({ type: 'kit', data: kit, raw: data })
+        } else {
+          setResult({
+            type: 'kit',
+            data: null,
+            raw: data,
+            error: 'Kit non trouve. Verifiez que le code existe.',
+          })
+        }
+      } else if (barcodeContent.type === 'cmd') {
+        // Code CMD - anciennes etiquettes, chercher le premier item lie
+        const item = await fetchInventoryItemByCode(barcodeContent.code)
+        if (item) {
+          setResult({ type: 'inventory', data: item, raw: data })
+        } else {
+          setResult({
+            type: 'unknown',
+            data: null,
+            raw: data,
+            error: 'Aucun item trouve pour ce code commande.',
+          })
+        }
+      }
+      setShowResult(true)
+      setLoading(false)
+      return
+    }
+
+    // Fallback: ancien format JSON QR
     const qrContent = parseQRCode(data)
 
     if (!qrContent) {
@@ -114,7 +272,7 @@ export default function ScanQRScreen() {
         type: 'unknown',
         data: null,
         raw: data,
-        error: 'Format QR non reconnu. Attendu: format inventaire ReVolt.',
+        error: 'Format non reconnu. Attendu: INV-xxx ou KIT-xxx',
       })
       setShowResult(true)
       setLoading(false)
@@ -164,6 +322,7 @@ export default function ScanQRScreen() {
     setShowResult(false)
     setCheckoutDestination('')
     setCheckoutNotes('')
+    setRelatedItems([])
   }
 
   const formatCurrency = (amount: number | null) => {
@@ -271,7 +430,7 @@ export default function ScanQRScreen() {
         <Text style={styles.permissionIcon}>📷</Text>
         <Text style={styles.permissionTitle}>Acces camera requis</Text>
         <Text style={styles.permissionText}>
-          Pour scanner les QR codes, l'application a besoin d'acceder a votre camera.
+          Pour scanner les codes-barres, l'application a besoin d'acceder a votre camera.
         </Text>
         <TouchableOpacity style={styles.permissionButton} onPress={requestPermission}>
           <Text style={styles.permissionButtonText}>Autoriser l'acces</Text>
@@ -304,7 +463,7 @@ export default function ScanQRScreen() {
           <View style={[styles.corner, styles.bottomRight]} />
         </View>
         <Text style={styles.instruction}>
-          {loading ? 'Verification...' : 'Positionnez le QR code dans le cadre'}
+          {loading ? 'Verification...' : 'Positionnez le code-barres dans le cadre'}
         </Text>
       </View>
 
@@ -411,6 +570,44 @@ export default function ScanQRScreen() {
                     <Text style={styles.checkoutInfoText}>
                       Depuis: {new Date((result.data as InventoryItem).checked_out_at!).toLocaleDateString('fr-CA')}
                     </Text>
+                  </View>
+                )}
+
+                {/* Liste des items de la commande */}
+                {relatedItems.length > 1 && (
+                  <View style={{ borderTopWidth: 1, borderTopColor: '#E5E5E5', paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#666', marginBottom: 12 }}>
+                      Articles de la commande ({relatedItems.length})
+                    </Text>
+                    {relatedItems.map((relItem, idx) => (
+                      <View key={relItem.id} style={{
+                        flexDirection: 'row',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        paddingVertical: 10,
+                        paddingHorizontal: 12,
+                        backgroundColor: relItem.id === (result.data as InventoryItem).id ? '#FEF3C7' : '#F9FAFB',
+                        borderRadius: 8,
+                        marginBottom: 6
+                      }}>
+                        <View style={{ flex: 1, marginRight: 12 }}>
+                          <Text style={{ fontSize: 13, color: '#333' }} numberOfLines={2}>
+                            {relItem.description}
+                          </Text>
+                          <Text style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
+                            {relItem.qr_code}
+                          </Text>
+                        </View>
+                        <View style={{ alignItems: 'flex-end' }}>
+                          <Text style={{ fontSize: 16, fontWeight: '700', color: '#14532D' }}>
+                            {relItem.quantity} {relItem.unit}
+                          </Text>
+                          <Text style={{ fontSize: 10, color: getStatusLabel(relItem.status).color }}>
+                            {getStatusLabel(relItem.status).label}
+                          </Text>
+                        </View>
+                      </View>
+                    ))}
                   </View>
                 )}
 
@@ -531,50 +728,56 @@ export default function ScanQRScreen() {
               <Text style={styles.resultTitle}>Sortie materiel</Text>
             </View>
 
-            {result?.type === 'inventory' && result.data && (
-              <>
-                <View style={styles.checkoutItemInfo}>
-                  <Text style={styles.checkoutItemQr}>{(result.data as InventoryItem).qr_code}</Text>
-                  <Text style={styles.checkoutItemDesc} numberOfLines={2}>
-                    {(result.data as InventoryItem).description}
-                  </Text>
-                  <Text style={styles.checkoutItemQty}>
-                    {(result.data as InventoryItem).quantity} {(result.data as InventoryItem).unit}
-                  </Text>
-                </View>
+            <ScrollView style={{ flexGrow: 0 }} showsVerticalScrollIndicator={false}>
+              {result?.type === 'inventory' && result.data && (
+                <>
+                  <View style={styles.checkoutItemInfo}>
+                    <Text style={styles.checkoutItemQr}>{(result.data as InventoryItem).qr_code}</Text>
+                    <Text style={styles.checkoutItemDesc} numberOfLines={2}>
+                      {(result.data as InventoryItem).description}
+                    </Text>
+                  </View>
 
-                <View style={styles.checkoutUserInfo}>
-                  <Text style={styles.checkoutUserLabel}>Responsable</Text>
-                  <Text style={styles.checkoutUserValue}>
-                    {user?.first_name} {user?.last_name || user?.email}
-                  </Text>
-                </View>
+                  <View style={{ backgroundColor: '#FEF3C7', padding: 16, borderRadius: 12, marginBottom: 16, alignItems: 'center' }}>
+                    <Text style={{ fontSize: 14, color: '#92400E', marginBottom: 4 }}>Quantite a sortir</Text>
+                    <Text style={{ fontSize: 36, fontWeight: '700', color: '#78350F' }}>
+                      {(result.data as InventoryItem).quantity} {(result.data as InventoryItem).unit}
+                    </Text>
+                  </View>
 
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Destination (optionnel)</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={checkoutDestination}
-                    onChangeText={setCheckoutDestination}
-                    placeholder="Ex: Chantier ABC, Client XYZ..."
-                    placeholderTextColor="#999"
-                  />
-                </View>
+                  <View style={styles.checkoutUserInfo}>
+                    <Text style={styles.checkoutUserLabel}>Responsable</Text>
+                    <Text style={styles.checkoutUserValue}>
+                      {user?.first_name} {user?.last_name || user?.email}
+                    </Text>
+                  </View>
 
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Notes (optionnel)</Text>
-                  <TextInput
-                    style={[styles.textInput, styles.textArea]}
-                    value={checkoutNotes}
-                    onChangeText={setCheckoutNotes}
-                    placeholder="Notes supplementaires..."
-                    placeholderTextColor="#999"
-                    multiline
-                    numberOfLines={3}
-                  />
-                </View>
-              </>
-            )}
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Destination (optionnel)</Text>
+                    <TextInput
+                      style={styles.textInput}
+                      value={checkoutDestination}
+                      onChangeText={setCheckoutDestination}
+                      placeholder="Ex: Chantier ABC, Client XYZ..."
+                      placeholderTextColor="#999"
+                    />
+                  </View>
+
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Notes (optionnel)</Text>
+                    <TextInput
+                      style={[styles.textInput, styles.textArea]}
+                      value={checkoutNotes}
+                      onChangeText={setCheckoutNotes}
+                      placeholder="Notes supplementaires..."
+                      placeholderTextColor="#999"
+                      multiline
+                      numberOfLines={3}
+                    />
+                  </View>
+                </>
+              )}
+            </ScrollView>
 
             <View style={styles.modalButtons}>
               <TouchableOpacity
@@ -615,8 +818,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   scanArea: {
-    width: 250,
-    height: 250,
+    width: 300,
+    height: 120,
     backgroundColor: 'transparent',
     borderRadius: 16,
     position: 'relative',
@@ -633,28 +836,28 @@ const styles = StyleSheet.create({
     left: 0,
     borderBottomWidth: 0,
     borderRightWidth: 0,
-    borderTopLeftRadius: 16,
+    borderTopLeftRadius: 12,
   },
   topRight: {
     top: 0,
     right: 0,
     borderBottomWidth: 0,
     borderLeftWidth: 0,
-    borderTopRightRadius: 16,
+    borderTopRightRadius: 12,
   },
   bottomLeft: {
     bottom: 0,
     left: 0,
     borderTopWidth: 0,
     borderRightWidth: 0,
-    borderBottomLeftRadius: 16,
+    borderBottomLeftRadius: 12,
   },
   bottomRight: {
     bottom: 0,
     right: 0,
     borderTopWidth: 0,
     borderLeftWidth: 0,
-    borderBottomRightRadius: 16,
+    borderBottomRightRadius: 12,
   },
   instruction: {
     color: '#fff',

@@ -370,7 +370,7 @@ function AppNavigator({ navigationRef }: { navigationRef: any }) {
         <Stack.Screen name="NouveauRecu" component={NouveauRecuScreen} options={{ title: 'Nouveau reçu' }} />
         <Stack.Screen name="DetailsRecu" component={DetailsRecuScreen} options={{ title: 'Détails du reçu' }} />
         <Stack.Screen name="DetailsCommandeSupplier" component={DetailsCommandeSupplierScreen} options={{ title: 'Détails de la commande' }} />
-        <Stack.Screen name="ScanQR" component={ScanQRScreen} options={{ title: 'Scanner QR code' }} />
+        <Stack.Screen name="ScanQR" component={ScanQRScreen} options={{ title: 'Scanner code-barres' }} />
         {/* ERP */}
         <Stack.Screen name="ErpAppels" component={ErpAppelsScreen} options={{ headerShown: false }} />
         <Stack.Screen name="ErpNouvelAppel" component={ErpNouvelAppelScreen} options={{ headerShown: false }} />

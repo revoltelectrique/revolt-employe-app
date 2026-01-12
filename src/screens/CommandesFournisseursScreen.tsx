@@ -492,7 +492,7 @@ export default function CommandesFournisseursScreen() {
         onPress={() => navigation.navigate('ScanQR')}
       >
         <Text style={styles.scanButtonIcon}>📷</Text>
-        <Text style={styles.scanButtonText}>Scanner un QR code</Text>
+        <Text style={styles.scanButtonText}>Scanner code-barres</Text>
       </TouchableOpacity>
 
       {/* Liste */}
