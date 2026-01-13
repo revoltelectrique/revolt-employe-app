@@ -39,7 +39,13 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-notifications"
+      "expo-notifications",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Cette application utilise la caméra pour scanner les codes-barres."
+        }
+      ]
     ],
     "extra": {
       "eas": {
