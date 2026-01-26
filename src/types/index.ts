@@ -22,6 +22,7 @@ export interface User {
   can_access_receipts: boolean
   can_access_erp_beta: boolean
   can_access_forms: boolean
+  can_access_crm: boolean
   created_at: string
   expo_push_token?: string | null
 }
@@ -758,4 +759,113 @@ export const GENERATOR_STATUS_COLORS: Record<GeneratorInstallationStatus, string
   'en_cours': '#F59E0B',
   'complete': '#22C55E',
   'documents_envoyes': '#8B5CF6'
+}
+
+// =============================================
+// MODULE CRM
+// =============================================
+
+export type CRMLeadStatus = 'nouveau' | 'contacte' | 'qualifie' | 'converti' | 'perdu'
+export type CRMLeadSource = 'telephone' | 'email' | 'site_web' | 'reference' | 'autre'
+export type CRMClientType = 'residentiel' | 'commercial'
+export type CRMActivityType = 'appel' | 'email' | 'rencontre' | 'note' | 'rappel'
+
+export interface CRMLead {
+  id: string
+  lead_number: string
+  contact_name: string
+  company_name: string | null
+  email: string | null
+  phone_main: string | null
+  phone_cell: string | null
+  address_line1: string | null
+  address_line2: string | null
+  city: string | null
+  postal_code: string | null
+  province: string
+  client_type: CRMClientType
+  source: CRMLeadSource | null
+  status: CRMLeadStatus
+  assigned_to: string | null
+  estimated_value: number
+  probability: number
+  notes: string | null
+  lost_reason: string | null
+  created_at: string
+  updated_at: string
+  converted_at: string | null
+  lost_at: string | null
+  next_followup_date: string | null
+  created_by: string | null
+  // Relations
+  assigned_user?: { id: string; first_name?: string; last_name?: string; email: string }
+  activities?: CRMActivity[]
+  reminders?: CRMReminder[]
+}
+
+export interface CRMActivity {
+  id: string
+  lead_id: string | null
+  activity_type: CRMActivityType
+  subject: string
+  description: string | null
+  activity_date: string
+  duration_minutes: number | null
+  created_at: string
+  created_by: string
+  created_by_user?: { id: string; first_name?: string; last_name?: string }
+}
+
+export interface CRMReminder {
+  id: string
+  lead_id: string | null
+  reminder_date: string
+  message: string
+  is_completed: boolean
+  completed_at: string | null
+  assigned_to: string
+  created_at: string
+  created_by: string
+  assigned_user?: { id: string; first_name?: string; last_name?: string }
+}
+
+export interface CRMDashboardStats {
+  total_leads: number
+  active_leads: number
+  converted_leads: number
+  lost_leads: number
+  leads_by_status: { status: CRMLeadStatus; count: number; total_value: number }[]
+  total_pipeline_value: number
+  conversion_rate: number
+  overdue_reminders: number
+  upcoming_reminders: number
+}
+
+export const CRM_STATUS_LABELS: Record<CRMLeadStatus, string> = {
+  'nouveau': 'Nouveau',
+  'contacte': 'Contacté',
+  'qualifie': 'Qualifié',
+  'converti': 'Converti',
+  'perdu': 'Perdu'
+}
+
+export const CRM_STATUS_COLORS: Record<CRMLeadStatus, string> = {
+  'nouveau': '#3B82F6',
+  'contacte': '#F59E0B',
+  'qualifie': '#8B5CF6',
+  'converti': '#22C55E',
+  'perdu': '#EF4444'
+}
+
+export const CRM_SOURCE_LABELS: Record<CRMLeadSource, string> = {
+  'telephone': 'Téléphone',
+  'email': 'Email',
+  'site_web': 'Site web',
+  'reference': 'Référence',
+  'autre': 'Autre'
+}
+
+export const CRM_CLIENT_TYPE_LABELS: Record<CRMClientType, string> = {
+  'residentiel': 'Résidentiel',
+  'commercial': 'Commercial'
 }

@@ -61,6 +61,12 @@ import DetailsInspectionElectriqueScreen from './src/screens/DetailsInspectionEl
 // Génératrices
 import GeneratricesScreen from './src/screens/GeneratricesScreen'
 import DetailsGeneratriceScreen from './src/screens/DetailsGeneratriceScreen'
+// CRM
+import CRMHomeScreen from './src/screens/CRMHomeScreen'
+import CRMLeadsScreen from './src/screens/CRMLeadsScreen'
+import CRMLeadDetailScreen from './src/screens/CRMLeadDetailScreen'
+import CRMNewLeadScreen from './src/screens/CRMNewLeadScreen'
+import CRMRemindersScreen from './src/screens/CRMRemindersScreen'
 
 const Stack = createNativeStackNavigator()
 const Tab = createBottomTabNavigator()
@@ -113,6 +119,7 @@ function CustomDrawer({ visible, onClose, navigation }: { visible: boolean; onCl
   const canAccessInventory = isAdmin || profile?.can_access_inventory
   const canAccessErpBeta = isAdmin || profile?.can_access_erp_beta
   const canAccessForms = isAdmin || profile?.can_access_forms
+  const canAccessCRM = isAdmin || profile?.can_access_crm
 
   const menuItems = [
     { label: 'Accueil', icon: '🏠', screen: 'MainTabs', show: true },
@@ -127,6 +134,7 @@ function CustomDrawer({ visible, onClose, navigation }: { visible: boolean; onCl
     { label: 'Commandes fournisseurs', icon: '🚚', screen: 'CommandesStack', show: canAccessInventory },
     { label: 'Inspections', icon: '📋', screen: 'InspectionsStack', show: canAccessForms },
     { label: 'Génératrices', icon: '🔌', screen: 'GeneratricesStack', show: canAccessForms },
+    { label: 'CRM', icon: '👥', screen: 'CRMStack', show: canAccessCRM },
     { label: 'ERP Beta', icon: '⚡', screen: 'ErpStack', show: canAccessErpBeta, beta: true },
   ]
 
@@ -354,6 +362,7 @@ function AppNavigator({ navigationRef }: { navigationRef: any }) {
         <Stack.Screen name="CommandesStack" component={CommandesFournisseursScreen} options={{ title: 'Commandes fournisseurs' }} />
         <Stack.Screen name="InspectionsStack" component={InspectionsScreen} options={{ title: 'Inspections' }} />
         <Stack.Screen name="GeneratricesStack" component={GeneratricesScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="CRMStack" component={CRMHomeScreen} options={{ headerShown: false }} />
         <Stack.Screen name="ErpStack" component={ErpHomeScreen} options={{ headerShown: false }} />
         {/* Écrans de détails */}
         <Stack.Screen name="NouveauBC" component={NouveauBCScreen} options={{ title: 'Nouveau bon de commande' }} />
@@ -384,6 +393,11 @@ function AppNavigator({ navigationRef }: { navigationRef: any }) {
         <Stack.Screen name="DetailsInspectionElectrique" component={DetailsInspectionElectriqueScreen} options={{ headerShown: false }} />
         {/* Génératrices */}
         <Stack.Screen name="DetailsGeneratrice" component={DetailsGeneratriceScreen} options={{ headerShown: false }} />
+        {/* CRM */}
+        <Stack.Screen name="CRMLeads" component={CRMLeadsScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="CRMLeadDetail" component={CRMLeadDetailScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="CRMNewLead" component={CRMNewLeadScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="CRMReminders" component={CRMRemindersScreen} options={{ headerShown: false }} />
       </Stack.Navigator>
     </DrawerContext.Provider>
   )
