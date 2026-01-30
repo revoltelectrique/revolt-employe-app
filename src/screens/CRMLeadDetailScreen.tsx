@@ -12,14 +12,18 @@ import {
   ActivityIndicator,
   Linking,
   Alert,
+  Image,
 } from 'react-native'
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
+import * as ImagePicker from 'expo-image-picker'
+import * as DocumentPicker from 'expo-document-picker'
 import { supabase } from '../lib/supabase'
 import {
   CRMLead,
   CRMActivity,
   CRMReminder,
+  CRMAttachment,
   CRM_STATUS_LABELS,
   CRM_STATUS_COLORS,
   CRM_CLIENT_TYPE_LABELS,
@@ -45,6 +49,7 @@ export default function CRMLeadDetailScreen() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [updatingStatus, setUpdatingStatus] = useState(false)
+  const [uploading, setUploading] = useState(false)
 
   const loadData = async () => {
     try {
@@ -117,6 +122,183 @@ export default function CRMLeadDetailScreen() {
     Linking.openURL(`mailto:${email}`)
   }
 
+  // === Attachments ===
+
+  const showAttachmentOptions = () => {
+    Alert.alert(
+      'Ajouter une pièce jointe',
+      'Choisissez une option',
+      [
+        { text: 'Prendre une photo', onPress: takePhoto },
+        { text: 'Choisir une image', onPress: pickImage },
+        { text: 'Choisir un fichier', onPress: pickDocument },
+        { text: 'Annuler', style: 'cancel' },
+      ]
+    )
+  }
+
+  const takePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync()
+    if (status !== 'granted') {
+      Alert.alert('Permission refusée', "Accès à la caméra requis")
+      return
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+    })
+
+    if (!result.canceled && result.assets[0]) {
+      await uploadFile(result.assets[0].uri, 'image/jpeg', `photo_${Date.now()}.jpg`)
+    }
+  }
+
+  const pickImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (status !== 'granted') {
+      Alert.alert('Permission refusée', "Accès à la galerie requis")
+      return
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+    })
+
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0]
+      const ext = asset.uri.split('.').pop()?.toLowerCase() || 'jpg'
+      await uploadFile(asset.uri, `image/${ext === 'png' ? 'png' : 'jpeg'}`, asset.fileName || `image_${Date.now()}.${ext}`)
+    }
+  }
+
+  const pickDocument = async () => {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: ['application/pdf', 'image/*'],
+      copyToCacheDirectory: true,
+    })
+
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0]
+      await uploadFile(asset.uri, asset.mimeType || 'application/pdf', asset.name || `fichier_${Date.now()}`)
+    }
+  }
+
+  const uploadFile = async (uri: string, mimeType: string, fileName: string) => {
+    if (!lead) return
+    setUploading(true)
+
+    try {
+      const fileId = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
+      const ext = fileName.split('.').pop()?.toLowerCase() || 'bin'
+      const filePath = `leads/${lead.id}/${fileId}.${ext}`
+
+      // Read file as ArrayBuffer
+      const response = await fetch(uri)
+      const arrayBuffer = await response.arrayBuffer()
+      const uint8Array = new Uint8Array(arrayBuffer)
+
+      // Upload to Supabase Storage
+      const { error: uploadError } = await supabase.storage
+        .from('crm-attachments')
+        .upload(filePath, uint8Array, {
+          contentType: mimeType,
+          upsert: false,
+        })
+
+      if (uploadError) throw uploadError
+
+      // Generate signed URL (1 year)
+      const { data: urlData } = await supabase.storage
+        .from('crm-attachments')
+        .createSignedUrl(filePath, 60 * 60 * 24 * 365)
+
+      const newAttachment: CRMAttachment = {
+        id: fileId,
+        name: fileName,
+        url: urlData?.signedUrl || filePath,
+        path: filePath,
+        type: mimeType,
+        size: uint8Array.length,
+        uploaded_at: new Date().toISOString(),
+      }
+
+      // Update lead's attachments JSONB array
+      const updatedAttachments = [...(lead.attachments || []), newAttachment]
+      const { error: updateError } = await supabase
+        .from('crm_leads')
+        .update({
+          attachments: updatedAttachments,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', lead.id)
+
+      if (updateError) throw updateError
+
+      setLead({ ...lead, attachments: updatedAttachments })
+      Alert.alert('Succès', 'Pièce jointe ajoutée')
+    } catch (error: any) {
+      console.error('Error uploading:', error)
+      Alert.alert('Erreur', error.message || "Impossible d'ajouter la pièce jointe")
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const handleOpenAttachment = (attachment: CRMAttachment) => {
+    Linking.openURL(attachment.url).catch(() => {
+      Alert.alert('Erreur', 'Impossible d\'ouvrir le fichier')
+    })
+  }
+
+  const handleDeleteAttachment = (attachment: CRMAttachment) => {
+    Alert.alert(
+      'Supprimer',
+      `Supprimer "${attachment.name}" ?`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: async () => {
+            if (!lead) return
+            try {
+              // Delete from storage
+              if (attachment.path) {
+                await supabase.storage.from('crm-attachments').remove([attachment.path])
+              }
+
+              // Update lead's attachments array
+              const updatedAttachments = (lead.attachments || []).filter(a => a.id !== attachment.id)
+              const { error } = await supabase
+                .from('crm_leads')
+                .update({
+                  attachments: updatedAttachments,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', lead.id)
+
+              if (error) throw error
+
+              setLead({ ...lead, attachments: updatedAttachments })
+              Alert.alert('Succès', 'Pièce jointe supprimée')
+            } catch (error: any) {
+              console.error('Error deleting attachment:', error)
+              Alert.alert('Erreur', 'Impossible de supprimer la pièce jointe')
+            }
+          },
+        },
+      ]
+    )
+  }
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  }
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('fr-CA', {
       style: 'currency',
@@ -171,6 +353,7 @@ export default function CRMLeadDetailScreen() {
 
   const pendingReminders = lead.reminders?.filter(r => !r.is_completed) || []
   const overdueReminders = pendingReminders.filter(r => new Date(r.reminder_date) < new Date())
+  const attachments = lead.attachments || []
 
   return (
     <SafeAreaView style={styles.container}>
@@ -315,6 +498,76 @@ export default function CRMLeadDetailScreen() {
               <Text style={styles.valueAmount}>{lead.probability}%</Text>
             </View>
           </View>
+        </View>
+
+        {/* Pièces jointes */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>
+              Pièces jointes {attachments.length > 0 ? `(${attachments.length})` : ''}
+            </Text>
+            <TouchableOpacity
+              style={styles.addAttachmentButton}
+              onPress={showAttachmentOptions}
+              disabled={uploading}
+            >
+              {uploading ? (
+                <ActivityIndicator size="small" color="#10B981" />
+              ) : (
+                <>
+                  <Ionicons name="add-circle" size={20} color="#10B981" />
+                  <Text style={styles.addAttachmentText}>Ajouter</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {attachments.length > 0 ? (
+            <View style={styles.attachmentsContainer}>
+              {attachments.map((attachment) => {
+                const isImage = attachment.type.startsWith('image/')
+                return (
+                  <View key={attachment.id} style={styles.attachmentItem}>
+                    <TouchableOpacity
+                      style={styles.attachmentContent}
+                      onPress={() => handleOpenAttachment(attachment)}
+                    >
+                      {isImage ? (
+                        <Image
+                          source={{ uri: attachment.url }}
+                          style={styles.attachmentThumb}
+                        />
+                      ) : (
+                        <View style={styles.attachmentIconContainer}>
+                          <Ionicons name="document-text" size={24} color="#EF4444" />
+                        </View>
+                      )}
+                      <View style={styles.attachmentInfo}>
+                        <Text style={styles.attachmentName} numberOfLines={1}>
+                          {attachment.name}
+                        </Text>
+                        <Text style={styles.attachmentSize}>
+                          {formatFileSize(attachment.size)}
+                        </Text>
+                      </View>
+                      <Ionicons name="open-outline" size={18} color="#999" />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.deleteAttachmentButton}
+                      onPress={() => handleDeleteAttachment(attachment)}
+                    >
+                      <Ionicons name="trash-outline" size={18} color="#EF4444" />
+                    </TouchableOpacity>
+                  </View>
+                )
+              })}
+            </View>
+          ) : (
+            <View style={styles.emptyState}>
+              <Ionicons name="attach" size={24} color="#ccc" />
+              <Text style={styles.emptyText}>Aucune pièce jointe</Text>
+            </View>
+          )}
         </View>
 
         {/* Contact */}
@@ -608,11 +861,17 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 8,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
   sectionTitle: {
     fontSize: 16,
     fontWeight: '600',
     color: '#333',
-    marginBottom: 12,
+    marginBottom: 0,
   },
   statusButtons: {
     flexDirection: 'row',
@@ -649,6 +908,69 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#10B981',
     marginTop: 4,
+  },
+  // Attachments
+  addAttachmentButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: '#F0FDF4',
+  },
+  addAttachmentText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#10B981',
+  },
+  attachmentsContainer: {
+    backgroundColor: '#f9f9f9',
+    borderRadius: 8,
+  },
+  attachmentItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  attachmentContent: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  attachmentThumb: {
+    width: 44,
+    height: 44,
+    borderRadius: 6,
+    backgroundColor: '#eee',
+  },
+  attachmentIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 6,
+    backgroundColor: '#FEF2F2',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  attachmentInfo: {
+    flex: 1,
+  },
+  attachmentName: {
+    fontSize: 14,
+    color: '#333',
+    fontWeight: '500',
+  },
+  attachmentSize: {
+    fontSize: 12,
+    color: '#999',
+    marginTop: 2,
+  },
+  deleteAttachmentButton: {
+    padding: 8,
+    marginLeft: 4,
   },
   contactCard: {
     backgroundColor: '#f9f9f9',
@@ -755,6 +1077,7 @@ const styles = StyleSheet.create({
   emptyState: {
     padding: 20,
     alignItems: 'center',
+    gap: 8,
   },
   emptyText: {
     fontSize: 14,

@@ -255,6 +255,10 @@ export const CacheKeys = {
   // Inventory
   supplierOrders: () => `inventory:supplier_orders`,
   inventoryItems: () => `inventory:items`,
+
+  // Calendar
+  calendarEvents: (userId: string) => `calendar:events:${userId}`,
+  calendarEventDetail: (eventId: string) => `calendar:event:${eventId}`,
 }
 
 // Dummy storage object for compatibility

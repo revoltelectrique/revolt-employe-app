@@ -770,6 +770,16 @@ export type CRMLeadSource = 'telephone' | 'email' | 'site_web' | 'reference' | '
 export type CRMClientType = 'residentiel' | 'commercial'
 export type CRMActivityType = 'appel' | 'email' | 'rencontre' | 'note' | 'rappel'
 
+export interface CRMAttachment {
+  id: string
+  name: string
+  url: string
+  path: string
+  type: string
+  size: number
+  uploaded_at: string
+}
+
 export interface CRMLead {
   id: string
   lead_number: string
@@ -797,6 +807,7 @@ export interface CRMLead {
   lost_at: string | null
   next_followup_date: string | null
   created_by: string | null
+  attachments: CRMAttachment[]
   // Relations
   assigned_user?: { id: string; first_name?: string; last_name?: string; email: string }
   activities?: CRMActivity[]
@@ -868,4 +879,55 @@ export const CRM_SOURCE_LABELS: Record<CRMLeadSource, string> = {
 export const CRM_CLIENT_TYPE_LABELS: Record<CRMClientType, string> = {
   'residentiel': 'Résidentiel',
   'commercial': 'Commercial'
+}
+
+// =============================================
+// MODULE CALENDRIER
+// =============================================
+
+export type CalendarEventType = 'rendez_vous_client' | 'reunion_equipe' | 'inspection' | 'rappel_suivi' | 'autre'
+export type CalendarEventStatus = 'planifie' | 'confirme' | 'annule' | 'termine'
+
+export interface CalendarEvent {
+  id: string
+  event_number: string
+  title: string
+  description: string | null
+  location: string | null
+  event_type: CalendarEventType
+  status: CalendarEventStatus
+  start_date: string
+  end_date: string
+  all_day: boolean
+  rrule: string | null
+  color: string | null
+  created_by: string
+  created_at: string
+  updated_at: string
+  // Relations
+  creator?: { id: string; email: string; first_name?: string; last_name?: string }
+  attendees?: CalendarEventAttendee[]
+}
+
+export interface CalendarEventAttendee {
+  id: string
+  event_id: string
+  user_id: string
+  added_at: string
+  user?: { id: string; email: string; first_name?: string; last_name?: string }
+}
+
+export const CALENDAR_EVENT_TYPE_CONFIG: Record<CalendarEventType, { label: string; color: string }> = {
+  'rendez_vous_client': { label: 'Rendez-vous client', color: '#2563EB' },
+  'reunion_equipe': { label: 'Réunion équipe', color: '#7C3AED' },
+  'inspection': { label: 'Inspection', color: '#D97706' },
+  'rappel_suivi': { label: 'Rappel/Suivi', color: '#059669' },
+  'autre': { label: 'Autre', color: '#6B7280' },
+}
+
+export const CALENDAR_EVENT_STATUS_CONFIG: Record<CalendarEventStatus, { label: string; bg: string; text: string }> = {
+  'planifie': { label: 'Planifié', bg: '#DBEAFE', text: '#1D4ED8' },
+  'confirme': { label: 'Confirmé', bg: '#D1FAE5', text: '#059669' },
+  'annule': { label: 'Annulé', bg: '#F3F4F6', text: '#6B7280' },
+  'termine': { label: 'Terminé', bg: '#E5E7EB', text: '#374151' },
 }

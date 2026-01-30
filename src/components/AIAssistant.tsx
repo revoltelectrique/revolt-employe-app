@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react'
+import React, { useState, useRef } from 'react'
 import {
   View,
   Text,
@@ -10,8 +10,11 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Alert,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { Audio } from 'expo-av'
+import * as FileSystem from 'expo-file-system/legacy'
 import { supabase } from '../lib/supabase'
 
 const PORTAL_URL = process.env.EXPO_PUBLIC_PORTAL_URL || ''
@@ -28,69 +31,239 @@ export default function AIAssistant() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [isRecording, setIsRecording] = useState(false)
+  const [recordingDuration, setRecordingDuration] = useState(0)
   const flatListRef = useRef<FlatList>(null)
+  const recordingRef = useRef<Audio.Recording | null>(null)
+  const recordingInterval = useRef<ReturnType<typeof setInterval> | null>(null)
+  const durationRef = useRef(0)
+  const loadingRef = useRef(false)
+  const messagesRef = useRef<Message[]>([])
 
-  const sendCommand = useCallback(async () => {
-    const text = input.trim()
-    if (!text || loading) return
+  const setLoadingState = (val: boolean) => {
+    loadingRef.current = val
+    setLoading(val)
+  }
+  const setMessagesState = (updater: Message[] | ((prev: Message[]) => Message[])) => {
+    if (typeof updater === 'function') {
+      setMessages(prev => {
+        const next = updater(prev)
+        messagesRef.current = next
+        return next
+      })
+    } else {
+      messagesRef.current = updater
+      setMessages(updater)
+    }
+  }
 
-    // Add user message
-    const userMsg: Message = { id: Date.now().toString(), role: 'user', content: text }
-    const updatedMessages = [...messages, userMsg]
-    setMessages(updatedMessages)
+  const getAccessToken = async (): Promise<string | null> => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return null
+    const { data: { session } } = await supabase.auth.getSession()
+    return session?.access_token || null
+  }
+
+  const sendTextToAI = async (text: string) => {
+    if (!text.trim() || loadingRef.current) return
+
+    const userMsg: Message = { id: Date.now().toString(), role: 'user', content: text.trim() }
+    const updatedMessages = [...messagesRef.current, userMsg]
+    setMessagesState(updatedMessages)
     setInput('')
-    setLoading(true)
+    setLoadingState(true)
 
     try {
-      // Get session token
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session?.access_token) {
-        const errMsg: Message = {
+      const token = await getAccessToken()
+      if (!token) {
+        setMessagesState(prev => [...prev, {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
           content: 'Session expirée. Veuillez vous reconnecter.',
-        }
-        setMessages(prev => [...prev, errMsg])
+        }])
         return
       }
 
-      // Build history for context
-      const history = updatedMessages.map(m => ({
-        role: m.role,
-        content: m.content,
-      }))
+      const history = updatedMessages.map(m => ({ role: m.role, content: m.content }))
 
       const response = await fetch(`${PORTAL_URL}/api/ai/command`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ text, history }),
+        body: JSON.stringify({ text: text.trim(), history }),
       })
 
       const data = await response.json()
-
-      const aiMsg: Message = {
+      setMessagesState(prev => [...prev, {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: data.message || data.error || 'Aucune réponse.',
-      }
-      setMessages(prev => [...prev, aiMsg])
+      }])
     } catch (error) {
-      const errMsg: Message = {
+      console.error('[AI Assistant] Fetch error:', error)
+      setMessagesState(prev => [...prev, {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: 'Erreur de connexion au serveur. Vérifiez votre connexion internet.',
-      }
-      setMessages(prev => [...prev, errMsg])
+        content: `Erreur: ${error instanceof Error ? error.message : 'Connexion impossible'}`,
+      }])
     } finally {
-      setLoading(false)
+      setLoadingState(false)
     }
-  }, [input, loading, messages])
+  }
+
+  const sendCommand = () => {
+    sendTextToAI(input)
+  }
+
+  // Voice recording with expo-av
+  const startRecording = async () => {
+    if (loadingRef.current || isRecording) return
+    try {
+      const permission = await Audio.requestPermissionsAsync()
+      if (!permission.granted) {
+        Alert.alert('Permission refusée', "L'accès au microphone est requis pour la commande vocale.")
+        return
+      }
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      })
+
+      const { recording } = await Audio.Recording.createAsync({
+        isMeteringEnabled: false,
+        android: {
+          extension: '.amr',
+          outputFormat: Audio.AndroidOutputFormat.THREE_GPP,
+          audioEncoder: Audio.AndroidAudioEncoder.AMR_NB,
+          sampleRate: 8000,
+          numberOfChannels: 1,
+          bitRate: 12200,
+        },
+        ios: {
+          extension: '.amr',
+          outputFormat: Audio.IOSOutputFormat.AMR,
+          audioQuality: Audio.IOSAudioQuality.HIGH,
+          sampleRate: 8000,
+          numberOfChannels: 1,
+          bitRate: 12200,
+          linearPCMBitDepth: 16,
+          linearPCMIsBigEndian: false,
+          linearPCMIsFloat: false,
+        },
+        web: {},
+      })
+      recordingRef.current = recording
+      durationRef.current = 0
+      setRecordingDuration(0)
+      setIsRecording(true)
+      recordingInterval.current = setInterval(() => {
+        durationRef.current += 1
+        setRecordingDuration(durationRef.current)
+      }, 1000)
+    } catch (error) {
+      console.error('[AI Assistant] Record start error:', error)
+      Alert.alert('Erreur', "Impossible de démarrer l'enregistrement.")
+    }
+  }
+
+  const stopRecording = async () => {
+    if (!isRecording || !recordingRef.current) return
+    if (recordingInterval.current) {
+      clearInterval(recordingInterval.current)
+      recordingInterval.current = null
+    }
+    setIsRecording(false)
+
+    const recording = recordingRef.current
+    recordingRef.current = null
+
+    let uri: string | null = null
+    try {
+      await recording.stopAndUnloadAsync()
+      uri = recording.getURI()
+    } catch (e) {
+      console.warn('[AI Assistant] Stop error:', e)
+    }
+
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+    })
+
+    if (!uri) {
+      setMessagesState(prev => [...prev, {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: "Erreur: impossible de récupérer l'enregistrement. Réessayez.",
+      }])
+      return
+    }
+
+    if (durationRef.current < 1) {
+      setMessagesState(prev => [...prev, {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: 'Enregistrement trop court. Parlez plus longtemps.',
+      }])
+      return
+    }
+
+    setLoadingState(true)
+
+    try {
+      const token = await getAccessToken()
+      if (!token) {
+        setMessagesState(prev => [...prev, {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: 'Session expirée. Veuillez vous reconnecter.',
+        }])
+        setLoadingState(false)
+        return
+      }
+
+      const base64Audio = await FileSystem.readAsStringAsync(uri, {
+        encoding: 'base64' as any,
+      })
+
+      const transcribeResponse = await fetch(`${PORTAL_URL}/api/ai/transcribe`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ audio: base64Audio }),
+      })
+
+      const transcribeData = await transcribeResponse.json()
+
+      if (!transcribeData.text) {
+        setMessagesState(prev => [...prev, {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: transcribeData.error || 'Aucune parole détectée. Réessayez.',
+        }])
+        setLoadingState(false)
+        return
+      }
+
+      setLoadingState(false)
+      await sendTextToAI(transcribeData.text)
+    } catch (error) {
+      console.error('[AI Assistant] Voice error:', error)
+      setMessagesState(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: `Erreur vocale: ${error instanceof Error ? error.message : 'Erreur inconnue'}`,
+      }])
+      setLoadingState(false)
+    }
+  }
 
   const clearConversation = () => {
-    setMessages([])
+    setMessagesState([])
     setInput('')
   }
 
@@ -110,22 +283,19 @@ export default function AIAssistant() {
 
   return (
     <>
-      {/* Floating button */}
       <TouchableOpacity
-        style={[styles.fab, { bottom: 20 + insets.bottom }]}
+        style={[styles.fab, { bottom: 90 + insets.bottom }]}
         onPress={() => setVisible(true)}
         activeOpacity={0.8}
       >
         <Text style={styles.fabText}>AI</Text>
       </TouchableOpacity>
 
-      {/* Chat modal */}
       <Modal visible={visible} animationType="slide" onRequestClose={() => setVisible(false)}>
         <KeyboardAvoidingView
           style={styles.modalContainer}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
-          {/* Header */}
           <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
             <TouchableOpacity onPress={() => setVisible(false)} style={styles.headerButton}>
               <Text style={styles.headerButtonText}>✕</Text>
@@ -136,7 +306,6 @@ export default function AIAssistant() {
             </TouchableOpacity>
           </View>
 
-          {/* Messages */}
           <FlatList
             ref={flatListRef}
             data={messages}
@@ -149,7 +318,7 @@ export default function AIAssistant() {
                 <Text style={styles.emptyIcon}>🤖</Text>
                 <Text style={styles.emptyTitle}>Assistant IA ReVolt</Text>
                 <Text style={styles.emptyText}>
-                  Dites-moi ce que vous voulez faire:{'\n\n'}
+                  Tapez ou appuyez sur le micro pour parler:{'\n\n'}
                   • Créer un bon de commande{'\n'}
                   • Ajouter un événement au calendrier{'\n'}
                   • Créer une tâche{'\n'}
@@ -161,25 +330,40 @@ export default function AIAssistant() {
             }
           />
 
-          {/* Loading indicator */}
-          {loading && (
+          {isRecording && (
+            <View style={styles.recordingBar}>
+              <View style={styles.recordingDot} />
+              <Text style={styles.recordingText}>
+                Écoute en cours... {recordingDuration}s
+              </Text>
+            </View>
+          )}
+
+          {loading && !isRecording && (
             <View style={styles.loadingBar}>
               <ActivityIndicator size="small" color="#64191E" />
               <Text style={styles.loadingText}>Traitement en cours...</Text>
             </View>
           )}
 
-          {/* Input bar */}
           <View style={[styles.inputBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+            <TouchableOpacity
+              style={[styles.micButton, isRecording && styles.micButtonRecording]}
+              onPress={isRecording ? stopRecording : startRecording}
+              disabled={loading}
+            >
+              <Text style={styles.micButtonText}>{isRecording ? '⏹️' : '🎤'}</Text>
+            </TouchableOpacity>
+
             <TextInput
               style={styles.textInput}
               value={input}
               onChangeText={setInput}
-              placeholder="Tapez une commande..."
+              placeholder="Tapez ou appuyez 🎤..."
               placeholderTextColor="#999"
               multiline
               maxLength={500}
-              editable={!loading}
+              editable={!loading && !isRecording}
               onSubmitEditing={sendCommand}
               blurOnSubmit={false}
             />
@@ -198,7 +382,6 @@ export default function AIAssistant() {
 }
 
 const styles = StyleSheet.create({
-  // FAB
   fab: {
     position: 'absolute',
     right: 20,
@@ -220,14 +403,10 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
   },
-
-  // Modal
   modalContainer: {
     flex: 1,
     backgroundColor: '#f5f5f5',
   },
-
-  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -255,8 +434,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'right',
   },
-
-  // Messages
   messagesList: {
     padding: 16,
     flexGrow: 1,
@@ -303,8 +480,6 @@ const styles = StyleSheet.create({
   messageTextUser: {
     color: '#1a1a1a',
   },
-
-  // Empty state
   emptyContainer: {
     flex: 1,
     alignItems: 'center',
@@ -328,8 +503,27 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     textAlign: 'left',
   },
-
-  // Loading
+  recordingBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    gap: 8,
+    backgroundColor: '#FEF2F2',
+    borderTopWidth: 1,
+    borderTopColor: '#FCA5A5',
+  },
+  recordingDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#DC2626',
+  },
+  recordingText: {
+    fontSize: 14,
+    color: '#DC2626',
+    fontWeight: '600',
+  },
   loadingBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -344,8 +538,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#666',
   },
-
-  // Input
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',
@@ -355,6 +547,20 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#e0e0e0',
     gap: 8,
+  },
+  micButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#f0f0f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  micButtonRecording: {
+    backgroundColor: '#FEE2E2',
+  },
+  micButtonText: {
+    fontSize: 20,
   },
   textInput: {
     flex: 1,
