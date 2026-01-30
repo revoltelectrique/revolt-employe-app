@@ -67,6 +67,11 @@ import CRMLeadsScreen from './src/screens/CRMLeadsScreen'
 import CRMLeadDetailScreen from './src/screens/CRMLeadDetailScreen'
 import CRMNewLeadScreen from './src/screens/CRMNewLeadScreen'
 import CRMRemindersScreen from './src/screens/CRMRemindersScreen'
+// Calendrier
+import CalendrierScreen from './src/screens/CalendrierScreen'
+import NouvelEvenementScreen from './src/screens/NouvelEvenementScreen'
+import DetailsEvenementScreen from './src/screens/DetailsEvenementScreen'
+import AIAssistant from './src/components/AIAssistant'
 
 const Stack = createNativeStackNavigator()
 const Tab = createBottomTabNavigator()
@@ -135,6 +140,7 @@ function CustomDrawer({ visible, onClose, navigation }: { visible: boolean; onCl
     { label: 'Inspections', icon: '📋', screen: 'InspectionsStack', show: canAccessForms },
     { label: 'Génératrices', icon: '🔌', screen: 'GeneratricesStack', show: canAccessForms },
     { label: 'CRM', icon: '👥', screen: 'CRMStack', show: canAccessCRM },
+    { label: 'Calendrier', icon: '📅', screen: 'CalendrierStack', show: true },
     { label: 'ERP Beta', icon: '⚡', screen: 'ErpStack', show: canAccessErpBeta, beta: true },
   ]
 
@@ -398,7 +404,12 @@ function AppNavigator({ navigationRef }: { navigationRef: any }) {
         <Stack.Screen name="CRMLeadDetail" component={CRMLeadDetailScreen} options={{ headerShown: false }} />
         <Stack.Screen name="CRMNewLead" component={CRMNewLeadScreen} options={{ headerShown: false }} />
         <Stack.Screen name="CRMReminders" component={CRMRemindersScreen} options={{ headerShown: false }} />
+        {/* Calendrier */}
+        <Stack.Screen name="CalendrierStack" component={CalendrierScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="NouvelEvenement" component={NouvelEvenementScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="DetailsEvenement" component={DetailsEvenementScreen} options={{ headerShown: false }} />
       </Stack.Navigator>
+      <AIAssistant />
     </DrawerContext.Provider>
   )
 }
