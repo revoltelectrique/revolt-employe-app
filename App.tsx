@@ -16,6 +16,7 @@ import {
   TouchableWithoutFeedback
 } from 'react-native'
 import * as Notifications from 'expo-notifications'
+import { SafeAreaProvider } from 'react-native-safe-area-context'
 
 import { AuthProvider, useAuth } from './src/contexts/AuthContext'
 import { OfflineProvider } from './src/contexts/OfflineContext'
@@ -437,14 +438,16 @@ export default function App() {
   }
 
   return (
-    <AuthProvider>
-      <OfflineProvider autoSyncOnReconnect={true} autoSyncOnForeground={true}>
-        <NavigationContainer ref={navigationRef}>
-          <StatusBar style="light" />
-          <AppNavigator navigationRef={navigationRef} />
-        </NavigationContainer>
-      </OfflineProvider>
-    </AuthProvider>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <OfflineProvider autoSyncOnReconnect={true} autoSyncOnForeground={true}>
+          <NavigationContainer ref={navigationRef}>
+            <StatusBar style="light" />
+            <AppNavigator navigationRef={navigationRef} />
+          </NavigationContainer>
+        </OfflineProvider>
+      </AuthProvider>
+    </SafeAreaProvider>
   )
 }
 
