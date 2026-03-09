@@ -93,29 +93,26 @@ export default function NouveauBCScreen() {
     }
 
     const validItems = items.filter((item) => item.description.trim())
-    if (validItems.length === 0) {
-      Alert.alert('Erreur', 'Veuillez ajouter au moins un item')
-      return
-    }
 
     setLoading(true)
 
     if (isOnline) {
       try {
-        // Générer le numéro de BC
+        // Générer le numéro de BC (format RV-XXXX, même que le portail web)
         const { data: lastPO } = await supabase
           .from('purchase_orders')
           .select('po_number')
-          .order('created_at', { ascending: false })
+          .like('po_number', 'RV-%')
+          .order('po_number', { ascending: false })
           .limit(1)
           .single()
 
         let nextNumber = 1
         if (lastPO?.po_number) {
-          const match = lastPO.po_number.match(/BC-(\d+)/)
+          const match = lastPO.po_number.match(/RV-(\d+)/)
           if (match) nextNumber = parseInt(match[1]) + 1
         }
-        const poNumber = `BC-${String(nextNumber).padStart(4, '0')}`
+        const poNumber = `RV-${String(nextNumber).padStart(4, '0')}`
 
         // Créer le BC
         const { data: po, error: poError } = await supabase
@@ -143,15 +140,18 @@ export default function NouveauBCScreen() {
             .eq('id', fromRequisition.id)
         }
 
-        // Ajouter les items
-        const itemsToInsert = validItems.map((item) => ({
-          purchase_order_id: po.id,
-          description: item.description.trim(),
-          quantity: parseInt(item.quantity) || 1,
-          price: item.price ? parseFloat(item.price) : null,
-        }))
+        // Ajouter les items (seulement s'il y en a)
+        if (validItems.length > 0) {
+          const itemsToInsert = validItems.map((item) => ({
+            purchase_order_id: po.id,
+            description: item.description.trim(),
+            quantity: parseInt(item.quantity) || 1,
+            price: item.price ? parseFloat(item.price) : null,
+          }))
 
-        await supabase.from('purchase_order_items').insert(itemsToInsert)
+          const { error: itemsError } = await supabase.from('purchase_order_items').insert(itemsToInsert)
+          if (itemsError) throw itemsError
+        }
 
         // Upload des images si présentes
         if (images.length > 0) {
@@ -179,7 +179,7 @@ export default function NouveauBCScreen() {
       }
     } else {
       // Mode hors ligne - Ajouter à la queue
-      const tempPONumber = `BC-OFFLINE-${Date.now()}`
+      const tempPONumber = `RV-OFFLINE-${Date.now()}`
 
       addMutation({
         type: 'insert',
@@ -193,11 +193,13 @@ export default function NouveauBCScreen() {
           client_name: isBillable ? clientName.trim() : null,
           status: 'en_attente',
           material_request_id: fromRequisition?.id || null,
-          _items: validItems.map((item) => ({
-            description: item.description.trim(),
-            quantity: parseInt(item.quantity) || 1,
-            price: item.price ? parseFloat(item.price) : null,
-          })),
+          _items: validItems.length > 0
+            ? validItems.map((item) => ({
+                description: item.description.trim(),
+                quantity: parseInt(item.quantity) || 1,
+                price: item.price ? parseFloat(item.price) : null,
+              }))
+            : undefined,
         },
         maxRetries: 5,
       })
